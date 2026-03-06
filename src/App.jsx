@@ -19,34 +19,42 @@ const firebaseConfig = {
 const ADMIN_PASSWORD = "jeudi2024";
 
 const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
+const db  = getFirestore(app);
 
 const positionColors = { 1: "#FFD700", 2: "#C0C0C0", 3: "#CD7F32" };
 const trophyIcon = (r) => ({ 1: "🥇", 2: "🥈", 3: "🥉" }[r] || null);
-
-// ─── NAV TABS ────────────────────────────────────────────────
-const NAV = ["classement", "recapitulatif", "matchs"];
+const NAV        = ["classement", "recapitulatif", "matchs"];
 const NAV_LABELS = { classement: "🏆 Classement", recapitulatif: "📊 Récap", matchs: "📅 Matchs" };
 
+// Convertit "2025-01-23" → "23/01/2025"
+const formatDate = (isoDate) => {
+  if (!isoDate) return "";
+  const [y, m, d] = isoDate.split("-");
+  return `${d}/${m}/${y}`;
+};
+// Aujourd'hui au format YYYY-MM-DD pour l'input date
+const todayISO = () => new Date().toISOString().split("T")[0];
+
 export default function FootballTracker() {
-  const [players, setPlayers]         = useState([]);
+  const [players,      setPlayers]      = useState([]);
   const [matchHistory, setMatchHistory] = useState([]);
-  const [isAdmin, setIsAdmin]         = useState(false);
-  const [passwordInput, setPasswordInput] = useState("");
-  const [passwordError, setPasswordError] = useState(false);
-  const [showLogin, setShowLogin]     = useState(false);
-  const [page, setPage]               = useState("classement");
-  const [activeTab, setActiveTab]     = useState("buteurs");
-  const [matchMode, setMatchMode]     = useState(false);
-  const [matchEvents, setMatchEvents] = useState([]);
+  const [isAdmin,      setIsAdmin]      = useState(false);
+  const [passwordInput,setPasswordInput]= useState("");
+  const [passwordError,setPasswordError]= useState(false);
+  const [showLogin,    setShowLogin]    = useState(false);
+  const [page,         setPage]         = useState("classement");
+  const [activeTab,    setActiveTab]    = useState("buteurs");
+  const [matchMode,    setMatchMode]    = useState(false);
+  const [matchDate,    setMatchDate]    = useState(todayISO());
+  const [matchEvents,  setMatchEvents]  = useState([]);
   const [selectedPlayer, setSelectedPlayer] = useState("");
   const [selectedAssist, setSelectedAssist] = useState("");
-  const [goalQty, setGoalQty]         = useState(1);
-  const [newName, setNewName]         = useState("");
-  const [loading, setLoading]         = useState(true);
-  const [flashId, setFlashId]         = useState(null);
-  const [editingPlayer, setEditingPlayer] = useState(null);
-  const [selectedMatch, setSelectedMatch] = useState(null);
+  const [goalQty,      setGoalQty]      = useState(1);
+  const [newName,      setNewName]      = useState("");
+  const [loading,      setLoading]      = useState(true);
+  const [flashId,      setFlashId]      = useState(null);
+  const [editingPlayer,setEditingPlayer]= useState(null);
+  const [selectedMatch,setSelectedMatch]= useState(null);
 
   useEffect(() => {
     const unsubPlayers = onSnapshot(collection(db, "players"), (snap) => {
@@ -80,42 +88,88 @@ export default function FootballTracker() {
     await deleteDoc(doc(db, "players", id));
   };
 
+  // ── Ajoute les événements buts dans le tableau local ──
   const addGoalEvent = () => {
     if (!selectedPlayer) return;
-    const qty = parseInt(goalQty) || 1;
-    const newEvents = Array.from({ length: qty }, (_, i) => ({
-      id: Date.now() + i,
-      scorerId: selectedPlayer,
-      assistId: qty === 1 && selectedAssist ? selectedAssist : null,
-    }));
-    setMatchEvents([...matchEvents, ...newEvents]);
+    const qty = Math.max(1, parseInt(goalQty) || 1);
+    const events = [];
+    for (let i = 0; i < qty; i++) {
+      events.push({
+        id: Date.now() + i,
+        scorerId: selectedPlayer,
+        // Passeur seulement si 1 but
+        assistId: qty === 1 && selectedAssist ? selectedAssist : null,
+      });
+    }
+    setMatchEvents(prev => [...prev, ...events]);
     setSelectedPlayer(""); setSelectedAssist(""); setGoalQty(1);
   };
 
+  // ── Supprime TOUS les buts d'un buteur dans la saisie en cours ──
+  const removeScorer = (scorerId) => {
+    setMatchEvents(prev => prev.filter(e => e.scorerId !== scorerId));
+  };
+
+  // ── Valide et enregistre le match ──
   const validateMatch = async () => {
     if (matchEvents.length === 0) return;
+
+    // Met à jour chaque joueur
     for (const player of players) {
-      const goals   = matchEvents.filter((e) => e.scorerId === player.id).length;
-      const assists = matchEvents.filter((e) => e.assistId === player.id).length;
+      const goals   = matchEvents.filter(e => e.scorerId === player.id).length;
+      const assists = matchEvents.filter(e => e.assistId === player.id).length;
       if (goals > 0 || assists > 0) {
         await updateDoc(doc(db, "players", player.id), {
-          goals:   player.goals + goals,
+          goals:   player.goals   + goals,
           assists: player.assists + assists,
           matches: player.matches + 1,
         });
       }
     }
+
+    // Enregistre le match avec la date choisie
+    const dateLabel = formatDate(matchDate);
     await addDoc(collection(db, "matches"), {
-      timestamp: Date.now(),
-      date: new Date().toLocaleDateString("fr-FR"),
-      events: matchEvents.map((e) => ({
-        scorer: players.find((p) => p.id === e.scorerId)?.name || "?",
-        assist: e.assistId ? players.find((p) => p.id === e.assistId)?.name : null,
+      timestamp: new Date(matchDate).getTime(),
+      date: dateLabel,
+      events: matchEvents.map(e => ({
+        scorer: players.find(p => p.id === e.scorerId)?.name || "?",
+        assist: e.assistId ? players.find(p => p.id === e.assistId)?.name : null,
       })),
     });
-    const topScorer = [...players].sort((a, b) => b.goals - a.goals)[0];
-    if (topScorer) { setFlashId(topScorer.id); setTimeout(() => setFlashId(null), 1500); }
-    setMatchEvents([]); setMatchMode(false);
+
+    const top = [...players].sort((a, b) => b.goals - a.goals)[0];
+    if (top) { setFlashId(top.id); setTimeout(() => setFlashId(null), 1500); }
+    setMatchEvents([]); setMatchMode(false); setMatchDate(todayISO());
+  };
+
+  // ── Supprime un match de l'historique + recalcule les stats ──
+  const deleteMatch = async (match) => {
+    if (!window.confirm(`Supprimer le match du ${match.date} ? Les stats seront recalculées.`)) return;
+
+    // Décrémenter les stats des joueurs concernés
+    const scorerCounts = {};
+    const assistCounts = {};
+    const participants = new Set();
+    for (const e of match.events || []) {
+      scorerCounts[e.scorer] = (scorerCounts[e.scorer] || 0) + 1;
+      participants.add(e.scorer);
+      if (e.assist) { assistCounts[e.assist] = (assistCounts[e.assist] || 0) + 1; participants.add(e.assist); }
+    }
+    for (const player of players) {
+      const g = scorerCounts[player.name] || 0;
+      const a = assistCounts[player.name] || 0;
+      const played = participants.has(player.name) ? 1 : 0;
+      if (g > 0 || a > 0 || played > 0) {
+        await updateDoc(doc(db, "players", player.id), {
+          goals:   Math.max(0, player.goals   - g),
+          assists: Math.max(0, player.assists - a),
+          matches: Math.max(0, player.matches - played),
+        });
+      }
+    }
+    await deleteDoc(doc(db, "matches", match.id));
+    setSelectedMatch(null);
   };
 
   const saveEditPlayer = async () => {
@@ -128,11 +182,20 @@ export default function FootballTracker() {
     setEditingPlayer(null);
   };
 
-  const sorted = (key) => [...players].sort((a, b) => b[key] - a[key] || b.assists - a.assists);
+  const sorted       = (key) => [...players].sort((a, b) => b[key] - a[key] || b.assists - a.assists);
   const totalGoals   = matchHistory.reduce((s, m) => s + (m.events?.length || 0), 0);
   const totalMatches = matchHistory.length;
   const topScorer    = sorted("goals")[0];
   const topAssister  = sorted("assists")[0];
+
+  // Grouper les buts de la saisie en cours par buteur
+  const groupedEvents = matchEvents.reduce((acc, e) => {
+    const name = players.find(p => p.id === e.scorerId)?.name || "?";
+    if (!acc[e.scorerId]) acc[e.scorerId] = { name, count: 0, assist: null };
+    acc[e.scorerId].count++;
+    if (e.assistId) acc[e.scorerId].assist = players.find(p => p.id === e.assistId)?.name;
+    return acc;
+  }, {});
 
   return (
     <div style={{ minHeight: "100vh", background: "linear-gradient(135deg, #0a1628 0%, #0d2137 40%, #0a1a0a 100%)", fontFamily: "'Bebas Neue', Impact, sans-serif", color: "#f0f4f8" }}>
@@ -154,11 +217,11 @@ export default function FootballTracker() {
 
         {/* ── LOGIN MODAL ── */}
         {showLogin && (
-          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 200 }}>
-            <div style={{ background: "#0d2137", border: "1px solid rgba(34,197,94,0.3)", borderRadius: 16, padding: 28, width: 300, textAlign: "center" }}>
+          <div style={modalOverlay}>
+            <div style={modalBox}>
               <div style={{ fontSize: 32, marginBottom: 8 }}>🔒</div>
               <h3 style={{ margin: "0 0 16px", fontSize: 22, letterSpacing: 3 }}>MOT DE PASSE</h3>
-              <input type="password" value={passwordInput} onChange={(e) => { setPasswordInput(e.target.value); setPasswordError(false); }} onKeyDown={(e) => e.key === "Enter" && tryLogin()} placeholder="Mot de passe..." style={{ ...inputStyle, width: "100%", marginBottom: 8, textAlign: "center" }} />
+              <input type="password" value={passwordInput} onChange={e => { setPasswordInput(e.target.value); setPasswordError(false); }} onKeyDown={e => e.key === "Enter" && tryLogin()} placeholder="Mot de passe..." style={{ ...inputStyle, width: "100%", marginBottom: 8, textAlign: "center" }} />
               {passwordError && <p style={{ fontFamily: "sans-serif", color: "#f87171", fontSize: 13, margin: "0 0 8px" }}>Mot de passe incorrect</p>}
               <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
                 <button onClick={() => { setShowLogin(false); setPasswordInput(""); }} style={{ ...btnSecondary, flex: 1 }}>Annuler</button>
@@ -170,8 +233,8 @@ export default function FootballTracker() {
 
         {/* ── EDIT PLAYER MODAL ── */}
         {editingPlayer && (
-          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 200 }}>
-            <div style={{ background: "#0d2137", border: "1px solid rgba(34,197,94,0.3)", borderRadius: 16, padding: 28, width: 320, textAlign: "center" }}>
+          <div style={modalOverlay}>
+            <div style={modalBox}>
               <div style={{ fontSize: 28, marginBottom: 4 }}>✏️</div>
               <h3 style={{ margin: "0 0 4px", fontSize: 22, letterSpacing: 3 }}>MODIFIER</h3>
               <p style={{ fontFamily: "sans-serif", fontSize: 14, color: "#22c55e", margin: "0 0 20px" }}>{players.find(p => p.id === editingPlayer.id)?.name}</p>
@@ -180,7 +243,7 @@ export default function FootballTracker() {
                   <label style={{ fontFamily: "sans-serif", fontSize: 13, color: "rgba(255,255,255,0.6)", width: 90, textAlign: "left" }}>{label}</label>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, flex: 1 }}>
                     <button onClick={() => setEditingPlayer({ ...editingPlayer, [field]: Math.max(0,(parseInt(editingPlayer[field])||0)-1) })} style={{ ...btnSecondary, padding: "6px 14px", fontSize: 18 }}>−</button>
-                    <input type="number" min="0" value={editingPlayer[field]} onChange={(e) => setEditingPlayer({ ...editingPlayer, [field]: e.target.value })} style={{ ...inputStyle, width: 60, textAlign: "center", padding: 8 }} />
+                    <input type="number" min="0" value={editingPlayer[field]} onChange={e => setEditingPlayer({ ...editingPlayer, [field]: e.target.value })} style={{ ...inputStyle, width: 60, textAlign: "center", padding: 8 }} />
                     <button onClick={() => setEditingPlayer({ ...editingPlayer, [field]: (parseInt(editingPlayer[field])||0)+1 })} style={{ ...btnPrimary, padding: "6px 14px", fontSize: 18 }}>+</button>
                   </div>
                 </div>
@@ -195,36 +258,32 @@ export default function FootballTracker() {
 
         {/* ── MATCH DETAIL MODAL ── */}
         {selectedMatch && (
-          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.80)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 200, padding: 16 }}>
-            <div style={{ background: "#0d2137", border: "1px solid rgba(34,197,94,0.25)", borderRadius: 16, padding: 28, width: "100%", maxWidth: 400, maxHeight: "80vh", overflowY: "auto" }}>
+          <div style={modalOverlay}>
+            <div style={{ ...modalBox, maxHeight: "85vh", overflowY: "auto", width: "100%", maxWidth: 420 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
                 <div>
                   <div style={{ fontSize: 26, letterSpacing: 3, color: "#22c55e" }}>JEUDI</div>
                   <div style={{ fontFamily: "sans-serif", fontSize: 18, color: "#fff", fontWeight: "bold" }}>{selectedMatch.date}</div>
                 </div>
-                <button onClick={() => setSelectedMatch(null)} style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, color: "#fff", cursor: "pointer", fontSize: 20, padding: "6px 12px" }}>×</button>
+                <button onClick={() => setSelectedMatch(null)} style={{ ...btnSecondary, padding: "6px 12px", fontSize: 20 }}>×</button>
               </div>
 
-              {/* Résumé rapide */}
+              {/* Stats rapides */}
               <div style={{ display: "flex", gap: 10, marginBottom: 20 }}>
-                <div style={{ flex: 1, background: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.15)", borderRadius: 10, padding: "12px", textAlign: "center" }}>
-                  <div style={{ fontSize: 32, color: "#22c55e" }}>{selectedMatch.events?.length}</div>
-                  <div style={{ fontFamily: "sans-serif", fontSize: 11, color: "rgba(255,255,255,0.4)", letterSpacing: 1 }}>BUTS</div>
-                </div>
-                <div style={{ flex: 1, background: "rgba(59,130,246,0.08)", border: "1px solid rgba(59,130,246,0.15)", borderRadius: 10, padding: "12px", textAlign: "center" }}>
-                  <div style={{ fontSize: 32, color: "#60a5fa" }}>{selectedMatch.events?.filter(e => e.assist).length}</div>
-                  <div style={{ fontFamily: "sans-serif", fontSize: 11, color: "rgba(255,255,255,0.4)", letterSpacing: 1 }}>PASSES</div>
-                </div>
-                <div style={{ flex: 1, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 10, padding: "12px", textAlign: "center" }}>
-                  <div style={{ fontSize: 32, color: "rgba(255,255,255,0.7)" }}>
-                    {[...new Set(selectedMatch.events?.map(e => e.scorer))].length}
+                {[
+                  { val: selectedMatch.events?.length, label: "BUTS",    color: "#22c55e" },
+                  { val: selectedMatch.events?.filter(e => e.assist).length, label: "PASSES", color: "#60a5fa" },
+                  { val: [...new Set(selectedMatch.events?.map(e => e.scorer))].length, label: "BUTEURS", color: "rgba(255,255,255,0.7)" },
+                ].map(s => (
+                  <div key={s.label} style={{ flex: 1, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 10, padding: 12, textAlign: "center" }}>
+                    <div style={{ fontSize: 30, color: s.color }}>{s.val}</div>
+                    <div style={{ fontFamily: "sans-serif", fontSize: 10, color: "rgba(255,255,255,0.35)", letterSpacing: 1 }}>{s.label}</div>
                   </div>
-                  <div style={{ fontFamily: "sans-serif", fontSize: 11, color: "rgba(255,255,255,0.4)", letterSpacing: 1 }}>BUTEURS</div>
-                </div>
+                ))}
               </div>
 
-              {/* Classement du match */}
-              <div style={{ fontSize: 14, letterSpacing: 2, color: "rgba(255,255,255,0.35)", marginBottom: 10, fontFamily: "sans-serif" }}>BUTEURS DU MATCH</div>
+              {/* Buteurs du match */}
+              <div style={sectionLabel}>BUTEURS DU MATCH</div>
               {Object.entries(
                 (selectedMatch.events || []).reduce((acc, e) => {
                   if (!acc[e.scorer]) acc[e.scorer] = { goals: 0, assists: [] };
@@ -244,32 +303,35 @@ export default function FootballTracker() {
               ))}
 
               {/* Passeurs du match */}
-              {selectedMatch.events?.some(e => e.assist) && (
-                <>
-                  <div style={{ fontSize: 14, letterSpacing: 2, color: "rgba(255,255,255,0.35)", margin: "16px 0 10px", fontFamily: "sans-serif" }}>PASSEURS DU MATCH</div>
-                  {Object.entries(
-                    (selectedMatch.events || []).filter(e => e.assist).reduce((acc, e) => {
-                      acc[e.assist] = (acc[e.assist] || 0) + 1; return acc;
-                    }, {})
-                  ).sort((a, b) => b[1] - a[1]).map(([name, count], i) => (
-                    <div key={name} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 12px", background: "rgba(59,130,246,0.05)", border: "1px solid rgba(59,130,246,0.12)", borderRadius: 10, marginBottom: 6 }}>
-                      <span style={{ fontSize: 18 }}>🎯</span>
-                      <div style={{ flex: 1, fontFamily: "sans-serif", fontSize: 15, fontWeight: "bold", color: "#fff" }}>{name}</div>
-                      <div style={{ fontSize: 28, color: "#60a5fa", fontFamily: "'Bebas Neue', Impact, sans-serif" }}>{count}</div>
-                    </div>
-                  ))}
-                </>
-              )}
+              {selectedMatch.events?.some(e => e.assist) && <>
+                <div style={{ ...sectionLabel, marginTop: 16 }}>PASSEURS DU MATCH</div>
+                {Object.entries(
+                  (selectedMatch.events || []).filter(e => e.assist).reduce((acc, e) => { acc[e.assist] = (acc[e.assist]||0)+1; return acc; }, {})
+                ).sort((a,b) => b[1]-a[1]).map(([name, count]) => (
+                  <div key={name} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 12px", background: "rgba(59,130,246,0.05)", border: "1px solid rgba(59,130,246,0.12)", borderRadius: 10, marginBottom: 6 }}>
+                    <span style={{ fontSize: 18 }}>🎯</span>
+                    <div style={{ flex: 1, fontFamily: "sans-serif", fontSize: 15, fontWeight: "bold", color: "#fff" }}>{name}</div>
+                    <div style={{ fontSize: 28, color: "#60a5fa", fontFamily: "'Bebas Neue', Impact, sans-serif" }}>{count}</div>
+                  </div>
+                ))}
+              </>}
 
-              {/* Liste détaillée des buts */}
-              <div style={{ fontSize: 14, letterSpacing: 2, color: "rgba(255,255,255,0.35)", margin: "16px 0 10px", fontFamily: "sans-serif" }}>DÉTAIL DES BUTS</div>
+              {/* Détail but par but */}
+              <div style={{ ...sectionLabel, marginTop: 16 }}>DÉTAIL DES BUTS</div>
               {selectedMatch.events?.map((e, i) => (
-                <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", fontFamily: "sans-serif", fontSize: 13, color: "rgba(255,255,255,0.7)", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
-                  <span style={{ color: "rgba(255,255,255,0.3)", minWidth: 24, fontSize: 12 }}>{i + 1}.</span>
+                <div key={i} style={{ display: "flex", gap: 8, padding: "7px 10px", fontFamily: "sans-serif", fontSize: 13, color: "rgba(255,255,255,0.7)", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
+                  <span style={{ color: "rgba(255,255,255,0.3)", minWidth: 24, fontSize: 12 }}>{i+1}.</span>
                   <span>⚽ <strong style={{ color: "#fff" }}>{e.scorer}</strong></span>
                   {e.assist && <span style={{ color: "rgba(255,255,255,0.4)" }}>← 🎯 {e.assist}</span>}
                 </div>
               ))}
+
+              {/* Bouton supprimer le match (admin) */}
+              {isAdmin && (
+                <button onClick={() => deleteMatch(selectedMatch)} style={{ width: "100%", marginTop: 20, padding: 12, background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.3)", borderRadius: 10, color: "#f87171", fontFamily: "'Bebas Neue', Impact, sans-serif", fontSize: 16, letterSpacing: 2, cursor: "pointer" }}>
+                  🗑️ Supprimer ce match
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -287,58 +349,89 @@ export default function FootballTracker() {
         {isAdmin && matchMode && (
           <div style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(34,197,94,0.2)", borderRadius: 16, padding: 20, marginBottom: 20 }}>
             <h3 style={{ margin: "0 0 16px", fontSize: 22, letterSpacing: 3, color: "#22c55e" }}>⚽ Saisie du match</h3>
+
+            {/* Sélection de la date */}
+            <div style={{ marginBottom: 14 }}>
+              <label style={{ fontFamily: "sans-serif", fontSize: 12, color: "rgba(255,255,255,0.4)", letterSpacing: 2, display: "block", marginBottom: 6 }}>📅 DATE DU MATCH</label>
+              <input
+                type="date"
+                value={matchDate}
+                onChange={e => setMatchDate(e.target.value)}
+                style={{ ...inputStyle, width: "100%", colorScheme: "dark" }}
+              />
+            </div>
+
             <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 16 }}>
-              <select value={selectedPlayer} onChange={(e) => setSelectedPlayer(e.target.value)} style={selectStyle}>
+              {/* Buteur */}
+              <select value={selectedPlayer} onChange={e => setSelectedPlayer(e.target.value)} style={selectStyle}>
                 <option value="">Buteur *</option>
-                {players.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                {players.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
               </select>
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+
+              {/* Nombre de buts */}
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                 <label style={{ fontFamily: "sans-serif", fontSize: 13, color: "rgba(255,255,255,0.5)", whiteSpace: "nowrap" }}>Nombre de buts :</label>
-                <button onClick={() => setGoalQty(Math.max(1, goalQty - 1))} style={{ ...btnSecondary, padding: "8px 14px", fontSize: 18 }}>−</button>
-                <span style={{ fontFamily: "sans-serif", fontSize: 22, fontWeight: "bold", minWidth: 30, textAlign: "center", color: "#22c55e" }}>{goalQty}</span>
-                <button onClick={() => setGoalQty(goalQty + 1)} style={{ ...btnPrimary, padding: "8px 14px", fontSize: 18 }}>+</button>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1 }}>
+                  <button
+                    onClick={() => setGoalQty(q => Math.max(1, q - 1))}
+                    style={{ ...btnSecondary, padding: "10px 18px", fontSize: 20, lineHeight: 1 }}
+                  >−</button>
+                  <span style={{ fontFamily: "sans-serif", fontSize: 26, fontWeight: "bold", minWidth: 36, textAlign: "center", color: "#22c55e" }}>{goalQty}</span>
+                  <button
+                    onClick={() => setGoalQty(q => q + 1)}
+                    style={{ ...btnPrimary, padding: "10px 18px", fontSize: 20, lineHeight: 1 }}
+                  >+</button>
+                </div>
               </div>
-              {goalQty === 1 && (
-                <select value={selectedAssist} onChange={(e) => setSelectedAssist(e.target.value)} style={selectStyle}>
+
+              {/* Passeur (seulement si 1 but) */}
+              {goalQty === 1 ? (
+                <select value={selectedAssist} onChange={e => setSelectedAssist(e.target.value)} style={selectStyle}>
                   <option value="">Passeur décisif (optionnel)</option>
-                  {players.filter((p) => p.id !== selectedPlayer).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  {players.filter(p => p.id !== selectedPlayer).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>
+              ) : (
+                <p style={{ fontFamily: "sans-serif", fontSize: 12, color: "rgba(255,255,255,0.3)", margin: 0, textAlign: "center" }}>
+                  Pour saisir les passeurs, ajoute les buts un par un
+                </p>
               )}
-              {goalQty > 1 && <p style={{ fontFamily: "sans-serif", fontSize: 12, color: "rgba(255,255,255,0.3)", margin: 0, textAlign: "center" }}>Les passes sont saisies 1 but à la fois</p>}
+
               <button onClick={addGoalEvent} disabled={!selectedPlayer} style={{ ...btnBlue, opacity: selectedPlayer ? 1 : 0.4 }}>
                 + Ajouter {goalQty > 1 ? `${goalQty} buts` : "le but"}
               </button>
             </div>
+
+            {/* Récap des buts saisis */}
             {matchEvents.length > 0 && (
               <div style={{ marginBottom: 16 }}>
-                <div style={{ fontSize: 13, letterSpacing: 2, color: "rgba(255,255,255,0.4)", marginBottom: 8, fontFamily: "sans-serif" }}>BUTS ({matchEvents.length})</div>
-                {Object.entries(
-                  matchEvents.reduce((acc, e) => {
-                    const name = players.find(p => p.id === e.scorerId)?.name || "?";
-                    if (!acc[name]) acc[name] = { count: 0, assist: null };
-                    acc[name].count++;
-                    if (e.assistId) acc[name].assist = players.find(p => p.id === e.assistId)?.name;
-                    return acc;
-                  }, {})
-                ).map(([name, data]) => (
-                  <div key={name} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", background: "rgba(34,197,94,0.08)", borderRadius: 8, marginBottom: 6, fontFamily: "sans-serif", fontSize: 14 }}>
-                    <span>⚽ <strong>{name}</strong> {data.count > 1 && <span style={{ color: "#22c55e" }}>×{data.count}</span>}{data.assist && <span style={{ color: "rgba(255,255,255,0.5)" }}> → {data.assist}</span>}</span>
-                    <button onClick={() => setMatchEvents(matchEvents.filter(e => players.find(p => p.id === e.scorerId)?.name !== name))} style={{ background: "none", border: "none", color: "#f87171", cursor: "pointer", fontSize: 18 }}>×</button>
+                <div style={{ ...sectionLabel, marginBottom: 8 }}>BUTS SAISIS ({matchEvents.length})</div>
+                {Object.values(groupedEvents).map(({ name, count, assist }) => (
+                  <div key={name} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 12px", background: "rgba(34,197,94,0.08)", borderRadius: 8, marginBottom: 6, fontFamily: "sans-serif", fontSize: 14 }}>
+                    <span>
+                      ⚽ <strong>{name}</strong>
+                      {count > 1 && <span style={{ color: "#22c55e", marginLeft: 6 }}>×{count}</span>}
+                      {assist && <span style={{ color: "rgba(255,255,255,0.45)", marginLeft: 6 }}>← {assist}</span>}
+                    </span>
+                    <button
+                      onClick={() => removeScorer(Object.keys(groupedEvents).find(id => groupedEvents[id].name === name))}
+                      style={{ background: "none", border: "none", color: "#f87171", cursor: "pointer", fontSize: 20, padding: "0 4px" }}
+                    >×</button>
                   </div>
                 ))}
               </div>
             )}
-            <button onClick={validateMatch} disabled={matchEvents.length === 0} style={{ width: "100%", ...btnPrimary, opacity: matchEvents.length > 0 ? 1 : 0.4, fontSize: 20, letterSpacing: 3 }}>✅ Valider le match</button>
+
+            <button onClick={validateMatch} disabled={matchEvents.length === 0} style={{ width: "100%", ...btnPrimary, opacity: matchEvents.length > 0 ? 1 : 0.4, fontSize: 20, letterSpacing: 3, padding: 14 }}>
+              ✅ Valider le match
+            </button>
           </div>
         )}
 
-        {/* ════════════════════════════════════════
-            PAGE : CLASSEMENT
-        ════════════════════════════════════════ */}
+        {/* ════════ PAGE CLASSEMENT ════════ */}
         {page === "classement" && (
           <>
             <div style={{ display: "flex", background: "rgba(255,255,255,0.04)", borderRadius: 12, padding: 4, marginBottom: 20 }}>
-              {["buteurs","passeurs"].map((tab) => (
+              {["buteurs","passeurs"].map(tab => (
                 <button key={tab} onClick={() => setActiveTab(tab)} style={{ flex: 1, padding: 12, background: activeTab === tab ? "rgba(34,197,94,0.15)" : "transparent", border: activeTab === tab ? "1px solid rgba(34,197,94,0.3)" : "1px solid transparent", borderRadius: 10, color: activeTab === tab ? "#22c55e" : "rgba(255,255,255,0.4)", fontFamily: "'Bebas Neue', Impact, sans-serif", fontSize: 18, letterSpacing: 3, cursor: "pointer" }}>
                   {tab === "buteurs" ? "⚽ Buteurs" : "🎯 Passeurs"}
                 </button>
@@ -348,19 +441,14 @@ export default function FootballTracker() {
             <div style={{ marginBottom: 28 }}>
               {loading ? (
                 <div style={{ textAlign: "center", padding: "40px 0", fontFamily: "sans-serif", color: "rgba(255,255,255,0.3)" }}>Chargement...</div>
-              ) : (activeTab === "buteurs" ? sorted("goals") : sorted("assists")).length === 0 ? (
-                <div style={{ textAlign: "center", padding: "40px 0", fontFamily: "sans-serif", color: "rgba(255,255,255,0.25)", fontSize: 14 }}>Aucun joueur enregistré</div>
               ) : (activeTab === "buteurs" ? sorted("goals") : sorted("assists")).map((player, i) => {
-                const rank = i + 1;
-                const statKey = activeTab === "buteurs" ? "goals" : "assists";
+                const statKey   = activeTab === "buteurs" ? "goals" : "assists";
                 const statLabel = activeTab === "buteurs" ? "buts" : "passes";
-                const isFlashing = flashId === player.id;
-                const isTop3 = rank <= 3 && player[statKey] > 0;
+                const rank      = i + 1;
+                const isTop3    = rank <= 3 && player[statKey] > 0;
                 return (
-                  <div key={player.id} style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px 16px", marginBottom: 8, borderRadius: 14, background: isFlashing ? "rgba(34,197,94,0.2)" : isTop3 ? `rgba(${rank===1?"255,215,0":rank===2?"192,192,192":"205,127,50"},0.06)` : "rgba(255,255,255,0.03)", border: `1px solid ${isFlashing ? "rgba(34,197,94,0.5)" : isTop3 ? `rgba(${rank===1?"255,215,0":rank===2?"192,192,192":"205,127,50"},0.2)` : "rgba(255,255,255,0.05)"}`, transition: "all 0.3s" }}>
-                    <div style={{ width: 32, textAlign: "center", fontSize: isTop3 ? 22 : 14, fontFamily: "sans-serif", color: positionColors[rank] || "rgba(255,255,255,0.3)", fontWeight: "bold", flexShrink: 0 }}>
-                      {isTop3 ? trophyIcon(rank) : rank}
-                    </div>
+                  <div key={player.id} style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px 16px", marginBottom: 8, borderRadius: 14, background: flashId === player.id ? "rgba(34,197,94,0.2)" : isTop3 ? `rgba(${rank===1?"255,215,0":rank===2?"192,192,192":"205,127,50"},0.06)` : "rgba(255,255,255,0.03)", border: `1px solid ${isTop3 ? `rgba(${rank===1?"255,215,0":rank===2?"192,192,192":"205,127,50"},0.2)` : "rgba(255,255,255,0.05)"}`, transition: "all 0.3s" }}>
+                    <div style={{ width: 32, textAlign: "center", fontSize: isTop3 ? 22 : 14, fontFamily: "sans-serif", color: positionColors[rank] || "rgba(255,255,255,0.3)", fontWeight: "bold", flexShrink: 0 }}>{isTop3 ? trophyIcon(rank) : rank}</div>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: 20, letterSpacing: 2, color: isTop3 ? "#fff" : "rgba(255,255,255,0.8)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{player.name}</div>
                       <div style={{ fontFamily: "sans-serif", fontSize: 11, color: "rgba(255,255,255,0.3)", letterSpacing: 1, marginTop: 2 }}>{player.goals}G · {player.assists}A · {player.matches} matchs</div>
@@ -382,9 +470,9 @@ export default function FootballTracker() {
 
             {isAdmin && (
               <div style={{ background: "rgba(255,255,255,0.03)", border: "1px dashed rgba(255,255,255,0.1)", borderRadius: 14, padding: 16 }}>
-                <div style={{ fontSize: 14, letterSpacing: 2, color: "rgba(255,255,255,0.3)", marginBottom: 10, fontFamily: "sans-serif", textTransform: "uppercase" }}>Ajouter un joueur</div>
+                <div style={{ ...sectionLabel, marginBottom: 10 }}>AJOUTER UN JOUEUR</div>
                 <div style={{ display: "flex", gap: 10 }}>
-                  <input value={newName} onChange={(e) => setNewName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addPlayer()} placeholder="Nom du joueur..." style={{ ...inputStyle, flex: 1 }} />
+                  <input value={newName} onChange={e => setNewName(e.target.value)} onKeyDown={e => e.key === "Enter" && addPlayer()} placeholder="Nom du joueur..." style={{ ...inputStyle, flex: 1 }} />
                   <button onClick={addPlayer} style={{ ...btnPrimary, padding: "12px 20px", fontSize: 20 }}>+</button>
                 </div>
               </div>
@@ -392,19 +480,16 @@ export default function FootballTracker() {
           </>
         )}
 
-        {/* ════════════════════════════════════════
-            PAGE : RÉCAPITULATIF
-        ════════════════════════════════════════ */}
+        {/* ════════ PAGE RÉCAPITULATIF ════════ */}
         {page === "recapitulatif" && (
           <div>
-            {/* Chiffres clés */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 20 }}>
               {[
-                { label: "MATCHS JOUÉS", value: totalMatches, color: "#22c55e", icon: "📅" },
-                { label: "BUTS MARQUÉS", value: totalGoals, color: "#60a5fa", icon: "⚽" },
-                { label: "JOUEURS", value: players.length, color: "#f59e0b", icon: "👥" },
-                { label: "MOY. BUTS/MATCH", value: totalMatches > 0 ? (totalGoals / totalMatches).toFixed(1) : "0", color: "#a78bfa", icon: "📊" },
-              ].map((s) => (
+                { label: "MATCHS JOUÉS",     value: totalMatches, color: "#22c55e", icon: "📅" },
+                { label: "BUTS MARQUÉS",     value: totalGoals,   color: "#60a5fa", icon: "⚽" },
+                { label: "JOUEURS",          value: players.length, color: "#f59e0b", icon: "👥" },
+                { label: "MOY. BUTS/MATCH",  value: totalMatches > 0 ? (totalGoals/totalMatches).toFixed(1) : "0", color: "#a78bfa", icon: "📊" },
+              ].map(s => (
                 <div key={s.label} style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 14, padding: "18px 16px", textAlign: "center" }}>
                   <div style={{ fontSize: 28, marginBottom: 4 }}>{s.icon}</div>
                   <div style={{ fontSize: 36, color: s.color }}>{s.value}</div>
@@ -413,15 +498,14 @@ export default function FootballTracker() {
               ))}
             </div>
 
-            {/* Meilleurs joueurs */}
             {topScorer && topScorer.goals > 0 && (
-              <div style={{ marginBottom: 10 }}>
-                <div style={{ fontSize: 14, letterSpacing: 2, color: "rgba(255,255,255,0.35)", marginBottom: 10, fontFamily: "sans-serif" }}>🏆 MEILLEURS JOUEURS</div>
+              <div style={{ marginBottom: 20 }}>
+                <div style={sectionLabel}>🏆 MEILLEURS JOUEURS</div>
                 {[
-                  { label: "Meilleur buteur", player: topScorer, stat: topScorer.goals, unit: "buts", color: "#FFD700", icon: "⚽" },
-                  ...(topAssister && topAssister.assists > 0 ? [{ label: "Meilleur passeur", player: topAssister, stat: topAssister.assists, unit: "passes", color: "#60a5fa", icon: "🎯" }] : []),
-                ].map((item) => (
-                  <div key={item.label} style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px 16px", marginBottom: 8, borderRadius: 14, background: `rgba(${item.color === "#FFD700" ? "255,215,0" : "96,165,250"},0.06)`, border: `1px solid rgba(${item.color === "#FFD700" ? "255,215,0" : "96,165,250"},0.15)` }}>
+                  { label: "Meilleur buteur",  player: topScorer,   stat: topScorer.goals,   unit: "buts",  color: "#FFD700", icon: "⚽" },
+                  ...(topAssister?.assists > 0 ? [{ label: "Meilleur passeur", player: topAssister, stat: topAssister.assists, unit: "passes", color: "#60a5fa", icon: "🎯" }] : []),
+                ].map(item => (
+                  <div key={item.label} style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px 16px", marginBottom: 8, borderRadius: 14, background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
                     <span style={{ fontSize: 28 }}>{item.icon}</span>
                     <div style={{ flex: 1 }}>
                       <div style={{ fontFamily: "sans-serif", fontSize: 11, color: "rgba(255,255,255,0.4)", letterSpacing: 2, textTransform: "uppercase" }}>{item.label}</div>
@@ -436,17 +520,15 @@ export default function FootballTracker() {
               </div>
             )}
 
-            {/* Tableau complet */}
-            <div style={{ fontSize: 14, letterSpacing: 2, color: "rgba(255,255,255,0.35)", margin: "20px 0 10px", fontFamily: "sans-serif" }}>📋 TABLEAU COMPLET</div>
-            <div style={{ background: "rgba(255,255,255,0.03)", borderRadius: 14, overflow: "hidden", border: "1px solid rgba(255,255,255,0.06)" }}>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 60px 60px 70px", gap: 0, padding: "10px 16px", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-                {["JOUEUR", "⚽", "🎯", "MATCHS"].map(h => <div key={h} style={{ fontFamily: "sans-serif", fontSize: 11, color: "rgba(255,255,255,0.35)", letterSpacing: 2, textAlign: h === "JOUEUR" ? "left" : "center" }}>{h}</div>)}
+            <div style={sectionLabel}>📋 TABLEAU COMPLET</div>
+            <div style={{ background: "rgba(255,255,255,0.03)", borderRadius: 14, overflow: "hidden", border: "1px solid rgba(255,255,255,0.06)", marginTop: 10 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 60px 60px 70px", padding: "10px 16px", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                {["JOUEUR","⚽","🎯","MATCHS"].map(h => <div key={h} style={{ fontFamily: "sans-serif", fontSize: 11, color: "rgba(255,255,255,0.35)", letterSpacing: 2, textAlign: h==="JOUEUR"?"left":"center" }}>{h}</div>)}
               </div>
               {sorted("goals").map((p, i) => (
-                <div key={p.id} style={{ display: "grid", gridTemplateColumns: "1fr 60px 60px 70px", gap: 0, padding: "12px 16px", borderBottom: "1px solid rgba(255,255,255,0.04)", background: i % 2 === 0 ? "transparent" : "rgba(255,255,255,0.01)" }}>
-                  <div style={{ fontFamily: "sans-serif", fontSize: 14, color: "#fff", display: "flex", alignItems: "center", gap: 8 }}>
-                    {i < 3 && p.goals > 0 && <span>{trophyIcon(i+1)}</span>}
-                    {p.name}
+                <div key={p.id} style={{ display: "grid", gridTemplateColumns: "1fr 60px 60px 70px", padding: "12px 16px", borderBottom: "1px solid rgba(255,255,255,0.04)", background: i%2===0?"transparent":"rgba(255,255,255,0.01)" }}>
+                  <div style={{ fontFamily: "sans-serif", fontSize: 14, color: "#fff", display: "flex", alignItems: "center", gap: 6 }}>
+                    {i < 3 && p.goals > 0 && <span>{trophyIcon(i+1)}</span>}{p.name}
                   </div>
                   <div style={{ fontFamily: "sans-serif", fontSize: 16, color: "#22c55e", textAlign: "center", fontWeight: "bold" }}>{p.goals}</div>
                   <div style={{ fontFamily: "sans-serif", fontSize: 16, color: "#60a5fa", textAlign: "center", fontWeight: "bold" }}>{p.assists}</div>
@@ -457,48 +539,42 @@ export default function FootballTracker() {
           </div>
         )}
 
-        {/* ════════════════════════════════════════
-            PAGE : MATCHS PAR DATE
-        ════════════════════════════════════════ */}
+        {/* ════════ PAGE MATCHS ════════ */}
         {page === "matchs" && (
           <div>
-            <div style={{ fontSize: 14, letterSpacing: 2, color: "rgba(255,255,255,0.35)", marginBottom: 14, fontFamily: "sans-serif" }}>
+            <div style={{ ...sectionLabel, marginBottom: 14 }}>
               {matchHistory.length} MATCH{matchHistory.length > 1 ? "S" : ""} ENREGISTRÉ{matchHistory.length > 1 ? "S" : ""}
             </div>
             {matchHistory.length === 0 ? (
               <div style={{ textAlign: "center", padding: "40px 0", fontFamily: "sans-serif", color: "rgba(255,255,255,0.25)", fontSize: 14 }}>Aucun match enregistré</div>
             ) : matchHistory.map((m, i) => {
-              const uniqueScorers = [...new Set(m.events?.map(e => e.scorer) || [])];
-              const topScorerMatch = Object.entries(
-                (m.events || []).reduce((acc, e) => { acc[e.scorer] = (acc[e.scorer] || 0) + 1; return acc; }, {})
-              ).sort((a, b) => b[1] - a[1])[0];
+              const uniqueScorers   = [...new Set(m.events?.map(e => e.scorer) || [])];
+              const topScorerMatch  = Object.entries(
+                (m.events || []).reduce((acc, e) => { acc[e.scorer] = (acc[e.scorer]||0)+1; return acc; }, {})
+              ).sort((a,b) => b[1]-a[1])[0];
               return (
-                <div key={m.id} onClick={() => setSelectedMatch(m)} style={{ display: "flex", alignItems: "center", gap: 14, padding: "16px", marginBottom: 10, borderRadius: 14, background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", cursor: "pointer", transition: "all 0.2s" }}
+                <div key={m.id} onClick={() => setSelectedMatch(m)}
+                  style={{ display: "flex", alignItems: "center", gap: 14, padding: 16, marginBottom: 10, borderRadius: 14, background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", cursor: "pointer", transition: "background 0.2s" }}
                   onMouseEnter={e => e.currentTarget.style.background = "rgba(34,197,94,0.07)"}
                   onMouseLeave={e => e.currentTarget.style.background = "rgba(255,255,255,0.03)"}
                 >
-                  {/* Numéro / date */}
-                  <div style={{ textAlign: "center", flexShrink: 0 }}>
+                  <div style={{ textAlign: "center", flexShrink: 0, minWidth: 36 }}>
                     <div style={{ fontSize: 22, color: "#22c55e" }}>J{matchHistory.length - i}</div>
                     <div style={{ fontFamily: "sans-serif", fontSize: 11, color: "rgba(255,255,255,0.35)", whiteSpace: "nowrap" }}>{m.date}</div>
                   </div>
-
-                  {/* Infos */}
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontFamily: "sans-serif", fontSize: 13, color: "rgba(255,255,255,0.7)", marginBottom: 4 }}>
-                      {uniqueScorers.slice(0, 3).join(", ")}{uniqueScorers.length > 3 ? ` +${uniqueScorers.length - 3}` : ""}
+                    <div style={{ fontFamily: "sans-serif", fontSize: 13, color: "rgba(255,255,255,0.7)", marginBottom: 3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      {uniqueScorers.slice(0,3).join(", ")}{uniqueScorers.length > 3 ? ` +${uniqueScorers.length-3}` : ""}
                     </div>
                     {topScorerMatch && topScorerMatch[1] > 1 && (
                       <div style={{ fontFamily: "sans-serif", fontSize: 11, color: "#FFD700" }}>⭐ {topScorerMatch[0]} ({topScorerMatch[1]} buts)</div>
                     )}
                   </div>
-
-                  {/* Buts + flèche */}
                   <div style={{ textAlign: "right", flexShrink: 0 }}>
                     <div style={{ fontSize: 28, color: "#22c55e" }}>{m.events?.length}</div>
                     <div style={{ fontFamily: "sans-serif", fontSize: 10, color: "rgba(255,255,255,0.3)" }}>BUTS</div>
                   </div>
-                  <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 18, flexShrink: 0 }}>›</div>
+                  <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 20, flexShrink: 0 }}>›</div>
                 </div>
               );
             })}
@@ -508,9 +584,9 @@ export default function FootballTracker() {
 
       {/* ── BOTTOM NAV ── */}
       <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: "rgba(10,22,40,0.97)", backdropFilter: "blur(12px)", borderTop: "1px solid rgba(255,255,255,0.07)", display: "flex", zIndex: 50 }}>
-        {NAV.map((n) => (
+        {NAV.map(n => (
           <button key={n} onClick={() => { setPage(n); setMatchMode(false); }} style={{ flex: 1, padding: "14px 8px 18px", background: "none", border: "none", color: page === n ? "#22c55e" : "rgba(255,255,255,0.35)", fontFamily: "'Bebas Neue', Impact, sans-serif", fontSize: 13, letterSpacing: 2, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 2, transition: "color 0.2s" }}>
-            <span style={{ fontSize: 20 }}>{n === "classement" ? "🏆" : n === "recapitulatif" ? "📊" : "📅"}</span>
+            <span style={{ fontSize: 20 }}>{n==="classement"?"🏆":n==="recapitulatif"?"📊":"📅"}</span>
             {NAV_LABELS[n].split(" ")[1]}
             {page === n && <div style={{ width: 20, height: 2, background: "#22c55e", borderRadius: 2, marginTop: 2 }} />}
           </button>
@@ -522,15 +598,19 @@ export default function FootballTracker() {
         * { box-sizing: border-box; }
         input::placeholder { color: rgba(255,255,255,0.2); }
         input[type=number]::-webkit-inner-spin-button { opacity: 0.3; }
+        input[type=date]::-webkit-calendar-picker-indicator { filter: invert(0.7); }
         select option { background: #0d2137; color: #fff; }
       `}</style>
     </div>
   );
 }
 
-const inputStyle  = { padding: "12px 16px", background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 10, color: "#fff", fontFamily: "sans-serif", fontSize: 14, outline: "none" };
-const selectStyle = { width: "100%", padding: "12px 16px", background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 10, color: "#fff", fontFamily: "sans-serif", fontSize: 14, outline: "none", cursor: "pointer" };
-const btnPrimary  = { background: "linear-gradient(135deg, #16a34a, #22c55e)", border: "none", borderRadius: 10, color: "#fff", fontFamily: "'Bebas Neue', Impact, sans-serif", cursor: "pointer", padding: 12 };
-const btnSecondary= { background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 10, color: "rgba(255,255,255,0.7)", fontFamily: "'Bebas Neue', Impact, sans-serif", cursor: "pointer", padding: 12 };
-const btnDanger   = { background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.3)", borderRadius: 10, color: "#fca5a5", fontFamily: "'Bebas Neue', Impact, sans-serif", cursor: "pointer", padding: 12 };
-const btnBlue     = { width: "100%", padding: 12, background: "linear-gradient(135deg, #1d4ed8, #3b82f6)", border: "none", borderRadius: 10, color: "#fff", fontFamily: "'Bebas Neue', Impact, sans-serif", fontSize: 17, letterSpacing: 2, cursor: "pointer" };
+const inputStyle   = { padding: "12px 16px", background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 10, color: "#fff", fontFamily: "sans-serif", fontSize: 14, outline: "none" };
+const selectStyle  = { width: "100%", padding: "12px 16px", background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 10, color: "#fff", fontFamily: "sans-serif", fontSize: 14, outline: "none", cursor: "pointer" };
+const btnPrimary   = { background: "linear-gradient(135deg, #16a34a, #22c55e)", border: "none", borderRadius: 10, color: "#fff", fontFamily: "'Bebas Neue', Impact, sans-serif", cursor: "pointer", padding: 12 };
+const btnSecondary = { background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 10, color: "rgba(255,255,255,0.7)", fontFamily: "'Bebas Neue', Impact, sans-serif", cursor: "pointer", padding: 12 };
+const btnDanger    = { background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.3)", borderRadius: 10, color: "#fca5a5", fontFamily: "'Bebas Neue', Impact, sans-serif", cursor: "pointer", padding: 12 };
+const btnBlue      = { width: "100%", padding: 12, background: "linear-gradient(135deg, #1d4ed8, #3b82f6)", border: "none", borderRadius: 10, color: "#fff", fontFamily: "'Bebas Neue', Impact, sans-serif", fontSize: 17, letterSpacing: 2, cursor: "pointer" };
+const modalOverlay = { position: "fixed", inset: 0, background: "rgba(0,0,0,0.78)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 200, padding: 16 };
+const modalBox     = { background: "#0d2137", border: "1px solid rgba(34,197,94,0.25)", borderRadius: 16, padding: 28, width: "100%", maxWidth: 360, textAlign: "center" };
+const sectionLabel = { fontFamily: "sans-serif", fontSize: 12, color: "rgba(255,255,255,0.35)", letterSpacing: 2, textTransform: "uppercase", marginBottom: 8 };
