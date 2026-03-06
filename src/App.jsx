@@ -7,12 +7,12 @@ import {
 
 // 🔧 REMPLACE CES VALEURS PAR TON BLOC FIREBASE (étape 1)
 const firebaseConfig = {
-  apiKey: "REMPLACE_MOI",
-  authDomain: "REMPLACE_MOI",
-  projectId: "REMPLACE_MOI",
-  storageBucket: "REMPLACE_MOI",
-  messagingSenderId: "REMPLACE_MOI",
-  appId: "REMPLACE_MOI",
+  apiKey: "AIzaSyBUTJUJ7DCOjGq4noZXalLWqvDaBXZyu80",
+  authDomain: "foot-cdc-benin.firebaseapp.com",
+  projectId: "foot-cdc-benin",
+  storageBucket: "foot-cdc-benin.firebasestorage.app",
+  messagingSenderId: "67606549005",
+  appId: "1:67606549005:web:a669887869ad72ee85bb44"
 };
 
 // 🔑 MOT DE PASSE ADMIN — change-le ici
