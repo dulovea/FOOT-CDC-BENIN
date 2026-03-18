@@ -48,7 +48,7 @@ const getGroupIndexForDate = (date, totalGroups) => {
 const getNextThursday = () => {
   const d = new Date();
   const day = d.getDay();
-  const daysUntilThursday = (4 - day + 7) % 7 || 7;
+  const daysUntilThursday = (4 - day + 7) % 7 === 0 ? 0 : (4 - day + 7) % 7;
   d.setDate(d.getDate() + daysUntilThursday);
   return d;
 };
