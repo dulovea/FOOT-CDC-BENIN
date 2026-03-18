@@ -41,7 +41,7 @@ const getGroupIndexForDate = (date, totalGroups) => {
   if (totalGroups === 0) return 0;
   const msPerWeek = 7 * 24 * 60 * 60 * 1000;
   const weeksDiff = Math.round((date - FIRST_MATCH_DATE) / msPerWeek);
-  return ((weeksDiff % totalGroups) + totalGroups) % totalGroups;
+  return (((weeksDiff + 1) % totalGroups) + totalGroups) % totalGroups;
 };
 
 // Prochain jeudi à partir d'aujourd'hui
