@@ -18,7 +18,6 @@ const firebaseConfig = {
 const ADMIN_PASSWORD   = "jeudi2024";
 const FIRST_MATCH_DATE = new Date("2025-05-08");
 // 📧 Ton email pour le lien mailto
-const ADMIN_EMAIL      = "dulove.azon@cdcb.bj";
 const APP_URL          = "https://foot-cdc-benin.vercel.app/";
 
 const app = initializeApp(firebaseConfig);
@@ -281,7 +280,7 @@ export default function App() {
     body += `\n💰 PAIEMENT CE JEUDI\n`;
     body += `• Groupe : ${curGroup?.members}\n`;
     body += `• Montant : ${curGroup?.amount.toLocaleString()} FCFA\n`;
-    body += `\n📱 Classement en direct : ${APP_URL}\n\nÀ ce soir les gars ! ⚽🔥\n\nDulove`;
+    body += `\n📱 Classement en direct : ${APP_URL}\n\nÀ ce soir les gars ! ⚽🔥;
     setMailText(body);
     setShowMail(true);
   };
@@ -289,7 +288,7 @@ export default function App() {
   const openMailClient = () => {
     const subject = encodeURIComponent("⚽ Bulletin Officiel du Jeudi Football 🏆");
     const body    = encodeURIComponent(mailText);
-    window.open(`mailto:?subject=${subject}&body=${body}`);
+    const to = "Moresque.AFFEDJOU@cdcb.bj,dulove.azon@cdcb.bj,laurencio.tossa@cdcb.bj,franck.akanni@cdcb.bj,Arsene.FADO@cdcb.bj,Romuald.ALLAGBE@cdcb.bj,rufus.zanklan@cdcb.bj,Edmond.DJIDONOU@cdcb.bj,horace.akpo@cdcb.bj,Cedric.FOURN@cdcb.bj,Consultant1.RH@cdcb.bj,gilles.sanni@cdcb.bj,Shadrac.HOUESSINON@cdcb.bj,deenbka@gmail.com"; window.open(`mailto:${to}?subject=${subject}&body=${body}`);
   };
 
   // ── Charts ──
