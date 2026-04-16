@@ -19,7 +19,7 @@ const firebaseConfig = {
 const ADMIN_PASSWORD = "jeudi2024";
 
 // 📅 Date du premier match
-const FIRST_MATCH_DATE = new Date("2025-05-01");
+const FIRST_MATCH_DATE = new Date("2025-05-08");
 
 const app = initializeApp(firebaseConfig);
 const db  = getFirestore(app);
