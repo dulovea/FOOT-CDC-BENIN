@@ -15,10 +15,7 @@ const firebaseConfig = {
   appId: "1:67606549005:web:a669887869ad72ee85bb44"
 };
 
-// 🔑 MOT DE PASSE ADMIN
-const ADMIN_PASSWORD = "jeudi2024";
-
-// 📅 Date du premier match
+const ADMIN_PASSWORD  = "jeudi2024";
 const FIRST_MATCH_DATE = new Date("2025-05-08");
 
 const app = initializeApp(firebaseConfig);
@@ -32,6 +29,8 @@ const C = {
   border: "#e5e7eb", borderBlue: "#bfdbfe",
   danger: "#dc2626", dangerBg: "#fef2f2", success: "#059669", successBg: "#ecfdf5",
   shadow: "0 1px 4px rgba(0,0,0,0.08)", shadowMd: "0 4px 16px rgba(0,0,0,0.10)",
+  orange: "#ea580c", orangeBg: "#fff7ed", orangeBorder: "#fed7aa",
+  purple: "#7c3aed", purpleBg: "#f5f3ff", purpleBorder: "#ddd6fe",
 };
 
 const positionColors = { 1: C.gold, 2: C.silver, 3: C.bronze };
@@ -39,12 +38,8 @@ const trophyIcon = (r) => ({ 1: "🥇", 2: "🥈", 3: "🥉" }[r] || null);
 const NAV        = ["classement", "paiement", "recapitulatif", "matchs"];
 const NAV_LABELS = { classement: "Classement", paiement: "Paiement", recapitulatif: "Récap", matchs: "Matchs" };
 
-const formatDate = (isoDate) => {
-  if (!isoDate) return "";
-  const [y, m, d] = isoDate.split("-");
-  return `${d}/${m}/${y}`;
-};
-const todayISO = () => new Date().toISOString().split("T")[0];
+const formatDate = (isoDate) => { if (!isoDate) return ""; const [y,m,d] = isoDate.split("-"); return `${d}/${m}/${y}`; };
+const todayISO   = () => new Date().toISOString().split("T")[0];
 
 const getGroupIndexForDate = (date, totalGroups) => {
   if (totalGroups === 0) return 0;
@@ -54,11 +49,33 @@ const getGroupIndexForDate = (date, totalGroups) => {
 };
 
 const getNextThursday = () => {
-  const d = new Date();
-  const day = d.getDay();
-  const daysUntilThursday = (4 - day + 7) % 7 === 0 ? 0 : (4 - day + 7) % 7;
-  d.setDate(d.getDate() + daysUntilThursday);
-  return d;
+  const d = new Date(); const day = d.getDay();
+  const daysUntil = (4 - day + 7) % 7 === 0 ? 0 : (4 - day + 7) % 7;
+  d.setDate(d.getDate() + daysUntil); return d;
+};
+
+// ── Calcule le streak (matchs consécutifs marqués) d'un joueur ──
+const computeStreak = (playerName, matchHistory) => {
+  // On trie du plus récent au plus ancien
+  const sorted = [...matchHistory].sort((a, b) => b.timestamp - a.timestamp);
+  let streak = 0;
+  for (const match of sorted) {
+    const scored = match.events?.some(e => e.scorer === playerName);
+    const present = match.presentNames?.includes(playerName);
+    if (!present) continue; // absent → on ignore ce match pour le streak
+    if (scored) { streak++; } else { break; } // présent mais pas marqué → fin du streak
+  }
+  return streak;
+};
+
+// ── Calcule le Man of the Match pour chaque match ──
+const getManOfTheMatch = (match) => {
+  if (!match.events?.length) return null;
+  const counts = match.events.reduce((acc, e) => { acc[e.scorer] = (acc[e.scorer]||0)+1; return acc; }, {});
+  const sorted = Object.entries(counts).sort((a,b) => b[1]-a[1]);
+  if (sorted.length === 0) return null;
+  // En cas d'égalité on prend le premier (ordre d'insertion)
+  return { name: sorted[0][0], goals: sorted[0][1] };
 };
 
 const INITIAL_GROUPS = [
@@ -70,7 +87,6 @@ const INITIAL_GROUPS = [
   { id: 6, members: "Franck & Dine & Mario & Patterson", amount: 29900 },
 ];
 
-// Étapes de saisie du match
 const STEPS = ["presence", "buts", "validation"];
 
 export default function FootballTracker() {
@@ -83,9 +99,9 @@ export default function FootballTracker() {
   const [page,           setPage]           = useState("classement");
   const [activeTab,      setActiveTab]      = useState("buteurs");
   const [matchMode,      setMatchMode]      = useState(false);
-  const [matchStep,      setMatchStep]      = useState("presence"); // presence | buts | validation
+  const [matchStep,      setMatchStep]      = useState("presence");
   const [matchDate,      setMatchDate]      = useState(todayISO());
-  const [presentIds,     setPresentIds]     = useState([]); // joueurs présents
+  const [presentIds,     setPresentIds]     = useState([]);
   const [matchEvents,    setMatchEvents]    = useState([]);
   const [selectedPlayer, setSelectedPlayer] = useState("");
   const [selectedAssist, setSelectedAssist] = useState("");
@@ -97,15 +113,16 @@ export default function FootballTracker() {
   const [selectedMatch,  setSelectedMatch]  = useState(null);
   const [groups,         setGroups]         = useState(INITIAL_GROUPS);
   const [newGroupName,   setNewGroupName]   = useState("");
+  const [statView,       setStatView]       = useState("goals"); // goals | assists | ratio | streak
 
   useEffect(() => {
-    const unsubPlayers = onSnapshot(collection(db, "players"), (snap) => {
-      setPlayers(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+    const unsubPlayers = onSnapshot(collection(db, "players"), snap => {
+      setPlayers(snap.docs.map(d => ({ id: d.id, ...d.data() })));
       setLoading(false);
     });
     const unsubHistory = onSnapshot(
       query(collection(db, "matches"), orderBy("timestamp", "desc")),
-      (snap) => setMatchHistory(snap.docs.map((d) => ({ id: d.id, ...d.data() })))
+      snap => setMatchHistory(snap.docs.map(d => ({ id: d.id, ...d.data() })))
     );
     return () => { unsubPlayers(); unsubHistory(); };
   }, []);
@@ -117,10 +134,38 @@ export default function FootballTracker() {
   const nextNextGroup     = groups[(currentIdx + 2) % groups.length];
   const nextThursdayLabel = nextThursday.toLocaleDateString("fr-FR", { day: "2-digit", month: "long", year: "numeric" });
 
+  // ── Stats calculées ──
+  const playersWithStats = players.map(p => {
+    const ratio  = p.matches > 0 ? (p.goals / p.matches).toFixed(2) : "0.00";
+    const streak = computeStreak(p.name, matchHistory);
+    return { ...p, ratio: parseFloat(ratio), streak };
+  });
+
+  const sorted = (key) => {
+    if (key === "ratio")  return [...playersWithStats].sort((a,b) => b.ratio  - a.ratio  || b.goals - a.goals);
+    if (key === "streak") return [...playersWithStats].sort((a,b) => b.streak - a.streak || b.goals - a.goals);
+    return [...playersWithStats].sort((a,b) => b[key] - a[key] || b.assists - a.assists);
+  };
+
+  // Man of the Match global (joueur avec le plus de MOTM)
+  const motmCounts = matchHistory.reduce((acc, m) => {
+    const motm = getManOfTheMatch(m);
+    if (motm) acc[motm.name] = (acc[motm.name] || 0) + 1;
+    return acc;
+  }, {});
+  const topMotm = Object.entries(motmCounts).sort((a,b) => b[1]-a[1])[0];
+
+  // Meilleur streak actuel
+  const topStreak = [...playersWithStats].sort((a,b) => b.streak - a.streak)[0];
+
+  const totalGoals   = matchHistory.reduce((s, m) => s + (m.events?.length || 0), 0);
+  const topScorer    = sorted("goals")[0];
+  const topAssist    = sorted("assists")[0];
+  const topRatio     = sorted("ratio")[0];
+
   const tryLogin = () => {
-    if (passwordInput === ADMIN_PASSWORD) {
-      setIsAdmin(true); setShowLogin(false); setPasswordError(false); setPasswordInput("");
-    } else { setPasswordError(true); }
+    if (passwordInput === ADMIN_PASSWORD) { setIsAdmin(true); setShowLogin(false); setPasswordError(false); setPasswordInput(""); }
+    else { setPasswordError(true); }
   };
 
   const addPlayer = async () => {
@@ -135,10 +180,7 @@ export default function FootballTracker() {
     await deleteDoc(doc(db, "players", id));
   };
 
-  const togglePresence = (id) => {
-    setPresentIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
-  };
-
+  const togglePresence = (id) => setPresentIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
   const selectAll = () => setPresentIds(players.map(p => p.id));
   const clearAll  = () => setPresentIds([]);
 
@@ -157,13 +199,10 @@ export default function FootballTracker() {
 
   const validateMatch = async () => {
     if (presentIds.length === 0) return;
-
     for (const player of players) {
       const isPresent = presentIds.includes(player.id);
       const goals     = matchEvents.filter(e => e.scorerId === player.id).length;
       const assists   = matchEvents.filter(e => e.assistId === player.id).length;
-
-      // On incrémente les matchs pour TOUS les présents, buts/passes uniquement si marqué
       if (isPresent || goals > 0 || assists > 0) {
         await updateDoc(doc(db, "players", player.id), {
           goals:   player.goals   + goals,
@@ -172,36 +211,34 @@ export default function FootballTracker() {
         });
       }
     }
-
+    const motm = matchEvents.length > 0 ? getManOfTheMatch({
+      events: matchEvents.map(e => ({ scorer: players.find(p => p.id === e.scorerId)?.name || "?" }))
+    }) : null;
     await addDoc(collection(db, "matches"), {
-      timestamp: new Date(matchDate).getTime(),
-      date: formatDate(matchDate),
+      timestamp:    new Date(matchDate).getTime(),
+      date:         formatDate(matchDate),
       presentNames: presentIds.map(id => players.find(p => p.id === id)?.name || "?"),
-      events: matchEvents.map(e => ({
+      manOfMatch:   motm?.name || null,
+      events:       matchEvents.map(e => ({
         scorer: players.find(p => p.id === e.scorerId)?.name || "?",
         assist: e.assistId ? players.find(p => p.id === e.assistId)?.name : null,
       })),
     });
-
-    const top = [...players].sort((a, b) => b.goals - a.goals)[0];
+    const top = [...players].sort((a,b) => b.goals - a.goals)[0];
     if (top) { setFlashId(top.id); setTimeout(() => setFlashId(null), 1500); }
-
-    // Reset
-    setMatchEvents([]); setPresentIds([]); setMatchMode(false);
-    setMatchStep("presence"); setMatchDate(todayISO());
+    setMatchEvents([]); setPresentIds([]); setMatchMode(false); setMatchStep("presence"); setMatchDate(todayISO());
   };
 
   const deleteMatch = async (match) => {
     if (!window.confirm(`Supprimer le match du ${match.date} ?`)) return;
     const scorerCounts = {}; const assistCounts = {}; const presentNames = new Set(match.presentNames || []);
     for (const e of match.events || []) {
-      scorerCounts[e.scorer] = (scorerCounts[e.scorer] || 0) + 1;
-      if (e.assist) assistCounts[e.assist] = (assistCounts[e.assist] || 0) + 1;
+      scorerCounts[e.scorer] = (scorerCounts[e.scorer]||0)+1;
+      if (e.assist) assistCounts[e.assist] = (assistCounts[e.assist]||0)+1;
     }
     for (const player of players) {
-      const g       = scorerCounts[player.name] || 0;
-      const a       = assistCounts[player.name] || 0;
-      const played  = presentNames.has(player.name) ? 1 : 0;
+      const g = scorerCounts[player.name]||0; const a = assistCounts[player.name]||0;
+      const played = presentNames.has(player.name) ? 1 : 0;
       if (g > 0 || a > 0 || played > 0) {
         await updateDoc(doc(db, "players", player.id), {
           goals:   Math.max(0, player.goals   - g),
@@ -227,12 +264,8 @@ export default function FootballTracker() {
   const addGroup    = () => { if (!newGroupName.trim()) return; setGroups([...groups, { id: Date.now(), members: newGroupName.trim(), amount: 29900 }]); setNewGroupName(""); };
   const removeGroup = (id) => { if (groups.length <= 1) return; setGroups(groups.filter(g => g.id !== id)); };
 
-  const sorted     = (key) => [...players].sort((a, b) => b[key] - a[key] || b.assists - a.assists);
-  const totalGoals = matchHistory.reduce((s, m) => s + (m.events?.length || 0), 0);
-  const topScorer  = sorted("goals")[0];
-  const topAssist  = sorted("assists")[0];
-
-  const groupedEvents = matchEvents.reduce((acc, e) => {
+  const presentPlayers = players.filter(p => presentIds.includes(p.id));
+  const groupedEvents  = matchEvents.reduce((acc, e) => {
     const name = players.find(p => p.id === e.scorerId)?.name || "?";
     if (!acc[e.scorerId]) acc[e.scorerId] = { name, count: 0, assist: null };
     acc[e.scorerId].count++;
@@ -240,14 +273,19 @@ export default function FootballTracker() {
     return acc;
   }, {});
 
-  // Joueurs présents filtrés pour la saisie des buts
-  const presentPlayers = players.filter(p => presentIds.includes(p.id));
-
   const card  = { background: C.bgCard, borderRadius: 14, border: `1px solid ${C.border}`, boxShadow: C.shadow, padding: "16px" };
-  const badge = (active) => ({ flex: 1, padding: "10px 8px", background: active ? C.primary : "transparent", border: active ? "none" : `1px solid ${C.border}`, borderRadius: 10, color: active ? "#fff" : C.textLight, fontFamily: "'Bebas Neue', Impact, sans-serif", fontSize: 17, letterSpacing: 2, cursor: "pointer", transition: "all 0.2s" });
 
-  const startMatch = () => { setMatchMode(true); setMatchStep("presence"); setPage("classement"); };
+  const startMatch  = () => { setMatchMode(true); setMatchStep("presence"); setPage("classement"); };
   const cancelMatch = () => { setMatchMode(false); setMatchStep("presence"); setMatchEvents([]); setPresentIds([]); setMatchDate(todayISO()); };
+
+  // Config des vues du classement
+  const STAT_VIEWS = [
+    { key: "goals",   icon: "⚽", label: "Buts",   color: C.primary,  unit: "buts" },
+    { key: "assists", icon: "🎯", label: "Passes", color: C.purple,   unit: "passes" },
+    { key: "ratio",   icon: "📈", label: "Ratio",  color: C.orange,   unit: "b/m" },
+    { key: "streak",  icon: "🔥", label: "Série",  color: C.danger,   unit: "matchs" },
+  ];
+  const currentView = STAT_VIEWS.find(v => v.key === statView);
 
   return (
     <div style={{ minHeight: "100vh", background: C.bg, fontFamily: "'Bebas Neue', Impact, sans-serif", color: C.text }}>
@@ -308,83 +346,100 @@ export default function FootballTracker() {
         )}
 
         {/* MATCH DETAIL MODAL */}
-        {selectedMatch && (
-          <div style={modalOverlay}>
-            <div style={{ background: C.bgCard, border: `1px solid ${C.border}`, borderRadius: 16, padding: 24, width: "100%", maxWidth: 420, maxHeight: "85vh", overflowY: "auto", boxShadow: C.shadowMd }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-                <div>
-                  <div style={{ fontSize: 24, letterSpacing: 3, color: C.primary }}>JEUDI</div>
-                  <div style={{ fontFamily: "sans-serif", fontSize: 18, color: C.text, fontWeight: "bold" }}>{selectedMatch.date}</div>
-                </div>
-                <button onClick={() => setSelectedMatch(null)} style={{ ...btnSec, padding: "6px 12px", fontSize: 20 }}>×</button>
-              </div>
-
-              {/* Stats rapides */}
-              <div style={{ display: "flex", gap: 10, marginBottom: 20 }}>
-                {[
-                  { val: selectedMatch.presentNames?.length || 0, label: "PRÉSENTS", color: C.success },
-                  { val: selectedMatch.events?.length, label: "BUTS", color: C.primary },
-                  { val: selectedMatch.events?.filter(e => e.assist).length, label: "PASSES", color: "#7c3aed" },
-                ].map(s => (
-                  <div key={s.label} style={{ flex: 1, background: C.bgCard2, border: `1px solid ${C.border}`, borderRadius: 10, padding: 12, textAlign: "center" }}>
-                    <div style={{ fontSize: 28, color: s.color, fontFamily: "'Bebas Neue', Impact, sans-serif" }}>{s.val}</div>
-                    <div style={{ fontFamily: "sans-serif", fontSize: 10, color: C.textXlight, letterSpacing: 1 }}>{s.label}</div>
+        {selectedMatch && (() => {
+          const motm = getManOfTheMatch(selectedMatch);
+          return (
+            <div style={modalOverlay}>
+              <div style={{ background: C.bgCard, border: `1px solid ${C.border}`, borderRadius: 16, padding: 24, width: "100%", maxWidth: 420, maxHeight: "85vh", overflowY: "auto", boxShadow: C.shadowMd }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                  <div>
+                    <div style={{ fontSize: 24, letterSpacing: 3, color: C.primary }}>JEUDI</div>
+                    <div style={{ fontFamily: "sans-serif", fontSize: 18, color: C.text, fontWeight: "bold" }}>{selectedMatch.date}</div>
                   </div>
-                ))}
-              </div>
+                  <button onClick={() => setSelectedMatch(null)} style={{ ...btnSec, padding: "6px 12px", fontSize: 20 }}>×</button>
+                </div>
 
-              {/* Présents */}
-              {selectedMatch.presentNames?.length > 0 && <>
-                <div style={secLabel}>👥 JOUEURS PRÉSENTS</div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 16 }}>
-                  {selectedMatch.presentNames.map(name => (
-                    <span key={name} style={{ fontFamily: "sans-serif", fontSize: 12, background: C.successBg, border: "1px solid #a7f3d0", color: C.success, padding: "4px 10px", borderRadius: 20 }}>{name}</span>
+                {/* Man of the Match banner */}
+                {motm && (
+                  <div style={{ background: "linear-gradient(135deg, #fffbeb, #fef3c7)", border: "1px solid #fde68a", borderRadius: 12, padding: "12px 16px", marginBottom: 16, display: "flex", alignItems: "center", gap: 12 }}>
+                    <span style={{ fontSize: 32 }}>⭐</span>
+                    <div>
+                      <div style={{ fontFamily: "sans-serif", fontSize: 10, color: C.gold, letterSpacing: 2, textTransform: "uppercase", fontWeight: "bold" }}>Man of the Match</div>
+                      <div style={{ fontSize: 22, letterSpacing: 2, color: C.text }}>{motm.name}</div>
+                      <div style={{ fontFamily: "sans-serif", fontSize: 12, color: C.textLight }}>{motm.goals} but{motm.goals > 1 ? "s" : ""} ce soir</div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Stats rapides */}
+                <div style={{ display: "flex", gap: 10, marginBottom: 16 }}>
+                  {[
+                    { val: selectedMatch.presentNames?.length || 0, label: "PRÉSENTS", color: C.success },
+                    { val: selectedMatch.events?.length || 0,       label: "BUTS",     color: C.primary },
+                    { val: selectedMatch.events?.filter(e => e.assist).length || 0, label: "PASSES", color: C.purple },
+                  ].map(s => (
+                    <div key={s.label} style={{ flex: 1, background: C.bgCard2, border: `1px solid ${C.border}`, borderRadius: 10, padding: 12, textAlign: "center" }}>
+                      <div style={{ fontSize: 28, color: s.color, fontFamily: "'Bebas Neue', Impact, sans-serif" }}>{s.val}</div>
+                      <div style={{ fontFamily: "sans-serif", fontSize: 10, color: C.textXlight, letterSpacing: 1 }}>{s.label}</div>
+                    </div>
                   ))}
                 </div>
-              </>}
 
-              {/* Buteurs */}
-              <div style={secLabel}>BUTEURS DU MATCH</div>
-              {selectedMatch.events?.length === 0 && <p style={{ fontFamily: "sans-serif", fontSize: 13, color: C.textLight }}>Aucun but marqué</p>}
-              {Object.entries(
-                (selectedMatch.events || []).reduce((acc, e) => {
-                  if (!acc[e.scorer]) acc[e.scorer] = { goals: 0, assists: [] };
-                  acc[e.scorer].goals++;
-                  if (e.assist) acc[e.scorer].assists.push(e.assist);
-                  return acc;
-                }, {})
-              ).sort((a,b) => b[1].goals - a[1].goals).map(([name, data], i) => (
-                <div key={name} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 12px", background: i === 0 ? "#fffbeb" : C.bgCard2, border: `1px solid ${i === 0 ? "#fde68a" : C.border}`, borderRadius: 10, marginBottom: 6 }}>
-                  <span style={{ fontSize: 18 }}>{i === 0 ? "⭐" : "⚽"}</span>
-                  <div style={{ flex: 1, fontFamily: "sans-serif" }}>
-                    <div style={{ fontSize: 15, fontWeight: "bold", color: C.text }}>{name}</div>
-                    {data.assists.length > 0 && <div style={{ fontSize: 11, color: C.textLight }}>Passes reçues de : {data.assists.join(", ")}</div>}
+                {/* Présents */}
+                {selectedMatch.presentNames?.length > 0 && <>
+                  <div style={secLabel}>👥 JOUEURS PRÉSENTS</div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 16 }}>
+                    {selectedMatch.presentNames.map(name => (
+                      <span key={name} style={{ fontFamily: "sans-serif", fontSize: 12, background: C.successBg, border: "1px solid #a7f3d0", color: C.success, padding: "4px 10px", borderRadius: 20 }}>{name}</span>
+                    ))}
                   </div>
-                  <div style={{ fontSize: 26, color: i === 0 ? C.gold : C.primary, fontFamily: "'Bebas Neue', Impact, sans-serif" }}>{data.goals}</div>
-                </div>
-              ))}
+                </>}
 
-              {selectedMatch.events?.some(e => e.assist) && <>
-                <div style={{ ...secLabel, marginTop: 16 }}>PASSEURS DU MATCH</div>
-                {Object.entries(
-                  (selectedMatch.events||[]).filter(e => e.assist).reduce((acc, e) => { acc[e.assist]=(acc[e.assist]||0)+1; return acc; }, {})
-                ).sort((a,b) => b[1]-a[1]).map(([name, count]) => (
-                  <div key={name} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 12px", background: "#f5f3ff", border: "1px solid #ddd6fe", borderRadius: 10, marginBottom: 6 }}>
-                    <span style={{ fontSize: 18 }}>🎯</span>
-                    <div style={{ flex: 1, fontFamily: "sans-serif", fontSize: 15, fontWeight: "bold", color: C.text }}>{name}</div>
-                    <div style={{ fontSize: 26, color: "#7c3aed", fontFamily: "'Bebas Neue', Impact, sans-serif" }}>{count}</div>
-                  </div>
-                ))}
-              </>}
+                {/* Buteurs */}
+                <div style={secLabel}>BUTEURS DU MATCH</div>
+                {!selectedMatch.events?.length
+                  ? <p style={{ fontFamily: "sans-serif", fontSize: 13, color: C.textLight }}>Aucun but marqué</p>
+                  : Object.entries(
+                      (selectedMatch.events||[]).reduce((acc,e) => {
+                        if (!acc[e.scorer]) acc[e.scorer] = { goals: 0, assists: [] };
+                        acc[e.scorer].goals++;
+                        if (e.assist) acc[e.scorer].assists.push(e.assist);
+                        return acc;
+                      }, {})
+                    ).sort((a,b) => b[1].goals - a[1].goals).map(([name, data], i) => (
+                      <div key={name} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 12px", background: i===0?"#fffbeb":C.bgCard2, border: `1px solid ${i===0?"#fde68a":C.border}`, borderRadius: 10, marginBottom: 6 }}>
+                        <span style={{ fontSize: 18 }}>{i===0?"⭐":"⚽"}</span>
+                        <div style={{ flex: 1, fontFamily: "sans-serif" }}>
+                          <div style={{ fontSize: 15, fontWeight: "bold", color: C.text }}>{name}</div>
+                          {data.assists.length > 0 && <div style={{ fontSize: 11, color: C.textLight }}>Passes reçues de : {data.assists.join(", ")}</div>}
+                        </div>
+                        <div style={{ fontSize: 26, color: i===0?C.gold:C.primary, fontFamily: "'Bebas Neue', Impact, sans-serif" }}>{data.goals}</div>
+                      </div>
+                    ))
+                }
 
-              {isAdmin && (
-                <button onClick={() => deleteMatch(selectedMatch)} style={{ width: "100%", marginTop: 20, padding: 12, background: C.dangerBg, border: "1px solid #fecaca", borderRadius: 10, color: C.danger, fontFamily: "'Bebas Neue', Impact, sans-serif", fontSize: 16, letterSpacing: 2, cursor: "pointer" }}>
-                  🗑️ Supprimer ce match
-                </button>
-              )}
+                {selectedMatch.events?.some(e => e.assist) && <>
+                  <div style={{ ...secLabel, marginTop: 16 }}>PASSEURS DU MATCH</div>
+                  {Object.entries(
+                    (selectedMatch.events||[]).filter(e=>e.assist).reduce((acc,e) => { acc[e.assist]=(acc[e.assist]||0)+1; return acc; }, {})
+                  ).sort((a,b)=>b[1]-a[1]).map(([name,count]) => (
+                    <div key={name} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 12px", background: C.purpleBg, border: `1px solid ${C.purpleBorder}`, borderRadius: 10, marginBottom: 6 }}>
+                      <span style={{ fontSize: 18 }}>🎯</span>
+                      <div style={{ flex: 1, fontFamily: "sans-serif", fontSize: 15, fontWeight: "bold", color: C.text }}>{name}</div>
+                      <div style={{ fontSize: 26, color: C.purple, fontFamily: "'Bebas Neue', Impact, sans-serif" }}>{count}</div>
+                    </div>
+                  ))}
+                </>}
+
+                {isAdmin && (
+                  <button onClick={() => deleteMatch(selectedMatch)} style={{ width: "100%", marginTop: 20, padding: 12, background: C.dangerBg, border: "1px solid #fecaca", borderRadius: 10, color: C.danger, fontFamily: "'Bebas Neue', Impact, sans-serif", fontSize: 16, letterSpacing: 2, cursor: "pointer" }}>
+                    🗑️ Supprimer ce match
+                  </button>
+                )}
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* ADMIN: NOUVEAU MATCH */}
         {isAdmin && (
@@ -398,14 +453,11 @@ export default function FootballTracker() {
         {/* MATCH MODE */}
         {isAdmin && matchMode && (
           <div style={{ ...card, marginBottom: 20, border: `1px solid ${C.borderBlue}`, background: "#f0f7ff" }}>
-
-            {/* Indicateur d'étape */}
+            {/* Barre de progression */}
             <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
-              {[["presence", "1. Présence"], ["buts", "2. Buts"], ["validation", "3. Valider"]].map(([step, label]) => {
-                const stepIdx    = STEPS.indexOf(step);
-                const currentIdx = STEPS.indexOf(matchStep);
-                const isDone     = stepIdx < currentIdx;
-                const isActive   = step === matchStep;
+              {[["presence","1. Présence"],["buts","2. Buts"],["validation","3. Valider"]].map(([step, label]) => {
+                const stepIdx = STEPS.indexOf(step); const currIdx = STEPS.indexOf(matchStep);
+                const isDone = stepIdx < currIdx; const isActive = step === matchStep;
                 return (
                   <div key={step} style={{ flex: 1, textAlign: "center" }}>
                     <div style={{ height: 4, borderRadius: 2, background: isDone ? C.success : isActive ? C.primary : C.border, marginBottom: 4, transition: "background 0.3s" }} />
@@ -420,26 +472,20 @@ export default function FootballTracker() {
               <>
                 <h3 style={{ margin: "0 0 6px", fontSize: 20, letterSpacing: 3, color: C.primary }}>👥 Qui a joué ?</h3>
                 <p style={{ fontFamily: "sans-serif", fontSize: 13, color: C.textLight, margin: "0 0 14px" }}>Sélectionne tous les joueurs présents ce jeudi</p>
-
-                {/* Date */}
                 <div style={{ marginBottom: 14 }}>
                   <label style={{ fontFamily: "sans-serif", fontSize: 12, color: C.textLight, letterSpacing: 2, display: "block", marginBottom: 6, textTransform: "uppercase" }}>📅 Date du match</label>
                   <input type="date" value={matchDate} onChange={e => setMatchDate(e.target.value)} style={{ ...inputStyle, width: "100%" }} />
                 </div>
-
-                {/* Tout sélectionner / désélectionner */}
                 <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
                   <button onClick={selectAll} style={{ ...btnPri, flex: 1, padding: "8px", fontSize: 14, letterSpacing: 1 }}>✅ Tous</button>
-                  <button onClick={clearAll} style={{ ...btnSec, flex: 1, padding: "8px", fontSize: 14, letterSpacing: 1 }}>❌ Aucun</button>
+                  <button onClick={clearAll}  style={{ ...btnSec, flex: 1, padding: "8px", fontSize: 14, letterSpacing: 1 }}>❌ Aucun</button>
                 </div>
-
-                {/* Liste des joueurs */}
                 <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 16 }}>
                   {players.map(p => {
                     const isPresent = presentIds.includes(p.id);
                     return (
                       <div key={p.id} onClick={() => togglePresence(p.id)} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", borderRadius: 10, background: isPresent ? C.primaryLight : C.bgCard, border: `1px solid ${isPresent ? C.borderBlue : C.border}`, cursor: "pointer", transition: "all 0.15s" }}>
-                        <div style={{ width: 24, height: 24, borderRadius: "50%", background: isPresent ? C.primary : C.border, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, transition: "all 0.15s" }}>
+                        <div style={{ width: 24, height: 24, borderRadius: "50%", background: isPresent ? C.primary : C.border, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                           {isPresent && <span style={{ color: "#fff", fontSize: 14 }}>✓</span>}
                         </div>
                         <span style={{ fontFamily: "sans-serif", fontSize: 15, color: isPresent ? C.primary : C.textMid, fontWeight: isPresent ? "bold" : "normal" }}>{p.name}</span>
@@ -447,11 +493,9 @@ export default function FootballTracker() {
                     );
                   })}
                 </div>
-
                 <div style={{ fontFamily: "sans-serif", fontSize: 13, color: C.textLight, textAlign: "center", marginBottom: 12 }}>
                   {presentIds.length} joueur{presentIds.length > 1 ? "s" : ""} sélectionné{presentIds.length > 1 ? "s" : ""}
                 </div>
-
                 <button onClick={() => setMatchStep("buts")} disabled={presentIds.length === 0} style={{ width: "100%", ...btnPri, opacity: presentIds.length > 0 ? 1 : 0.4, fontSize: 18, letterSpacing: 2, padding: 14 }}>
                   Suivant → Saisir les buts
                 </button>
@@ -463,36 +507,30 @@ export default function FootballTracker() {
               <>
                 <h3 style={{ margin: "0 0 6px", fontSize: 20, letterSpacing: 3, color: C.primary }}>⚽ Buts marqués</h3>
                 <p style={{ fontFamily: "sans-serif", fontSize: 13, color: C.textLight, margin: "0 0 14px" }}>{presentIds.length} joueurs présents · {matchEvents.length} but{matchEvents.length > 1 ? "s" : ""} saisi{matchEvents.length > 1 ? "s" : ""}</p>
-
                 <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 16 }}>
                   <select value={selectedPlayer} onChange={e => setSelectedPlayer(e.target.value)} style={selStyle}>
                     <option value="">Buteur *</option>
                     {presentPlayers.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                   </select>
-
                   <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                     <label style={{ fontFamily: "sans-serif", fontSize: 13, color: C.textMid, whiteSpace: "nowrap" }}>Nombre de buts :</label>
                     <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1 }}>
-                      <button onClick={() => setGoalQty(q => Math.max(1, q-1))} style={{ ...btnSec, padding: "10px 18px", fontSize: 20 }}>−</button>
+                      <button onClick={() => setGoalQty(q => Math.max(1,q-1))} style={{ ...btnSec, padding: "10px 18px", fontSize: 20 }}>−</button>
                       <span style={{ fontFamily: "sans-serif", fontSize: 26, fontWeight: "bold", minWidth: 36, textAlign: "center", color: C.primary }}>{goalQty}</span>
                       <button onClick={() => setGoalQty(q => q+1)} style={{ ...btnPri, padding: "10px 18px", fontSize: 20 }}>+</button>
                     </div>
                   </div>
-
-                  {goalQty === 1 ? (
-                    <select value={selectedAssist} onChange={e => setSelectedAssist(e.target.value)} style={selStyle}>
-                      <option value="">Passeur décisif (optionnel)</option>
-                      {presentPlayers.filter(p => p.id !== selectedPlayer).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                    </select>
-                  ) : (
-                    <p style={{ fontFamily: "sans-serif", fontSize: 12, color: C.textLight, margin: 0, textAlign: "center" }}>Pour saisir les passeurs, ajoute les buts un par un</p>
-                  )}
-
+                  {goalQty === 1
+                    ? <select value={selectedAssist} onChange={e => setSelectedAssist(e.target.value)} style={selStyle}>
+                        <option value="">Passeur décisif (optionnel)</option>
+                        {presentPlayers.filter(p => p.id !== selectedPlayer).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                      </select>
+                    : <p style={{ fontFamily: "sans-serif", fontSize: 12, color: C.textLight, margin: 0, textAlign: "center" }}>Pour saisir les passeurs, ajoute les buts un par un</p>
+                  }
                   <button onClick={addGoalEvent} disabled={!selectedPlayer} style={{ width: "100%", padding: 12, background: selectedPlayer ? C.accent : C.border, border: "none", borderRadius: 10, color: selectedPlayer ? "#fff" : C.textLight, fontFamily: "'Bebas Neue', Impact, sans-serif", fontSize: 17, letterSpacing: 2, cursor: selectedPlayer ? "pointer" : "not-allowed" }}>
                     + Ajouter {goalQty > 1 ? `${goalQty} buts` : "le but"}
                   </button>
                 </div>
-
                 {matchEvents.length > 0 && (
                   <div style={{ marginBottom: 16 }}>
                     <div style={{ ...secLabel, marginBottom: 8 }}>BUTS SAISIS ({matchEvents.length})</div>
@@ -504,7 +542,6 @@ export default function FootballTracker() {
                     ))}
                   </div>
                 )}
-
                 <div style={{ display: "flex", gap: 8 }}>
                   <button onClick={() => setMatchStep("presence")} style={{ ...btnSec, flex: 1, padding: 12, fontSize: 15 }}>← Présence</button>
                   <button onClick={() => setMatchStep("validation")} style={{ ...btnPri, flex: 2, padding: 12, fontSize: 16, letterSpacing: 2 }}>Suivant → Valider</button>
@@ -516,28 +553,32 @@ export default function FootballTracker() {
             {matchStep === "validation" && (
               <>
                 <h3 style={{ margin: "0 0 16px", fontSize: 20, letterSpacing: 3, color: C.primary }}>✅ Récapitulatif</h3>
-
                 <div style={{ ...card, marginBottom: 12, background: C.successBg, border: "1px solid #a7f3d0" }}>
                   <div style={{ ...secLabel, marginBottom: 8 }}>👥 PRÉSENTS ({presentIds.length})</div>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                    {presentIds.map(id => {
-                      const p = players.find(x => x.id === id);
-                      return <span key={id} style={{ fontFamily: "sans-serif", fontSize: 12, background: "#fff", border: "1px solid #a7f3d0", color: C.success, padding: "3px 10px", borderRadius: 20 }}>{p?.name}</span>;
-                    })}
+                    {presentIds.map(id => { const p = players.find(x => x.id === id); return <span key={id} style={{ fontFamily: "sans-serif", fontSize: 12, background: "#fff", border: "1px solid #a7f3d0", color: C.success, padding: "3px 10px", borderRadius: 20 }}>{p?.name}</span>; })}
                   </div>
                 </div>
-
                 <div style={{ ...card, marginBottom: 16 }}>
                   <div style={{ ...secLabel, marginBottom: 8 }}>⚽ BUTS ({matchEvents.length})</div>
-                  {matchEvents.length === 0 ? (
-                    <p style={{ fontFamily: "sans-serif", fontSize: 13, color: C.textLight, margin: 0 }}>Aucun but saisi</p>
-                  ) : Object.values(groupedEvents).map(({ name, count, assist }) => (
-                    <div key={name} style={{ fontFamily: "sans-serif", fontSize: 14, color: C.textMid, marginBottom: 4 }}>
-                      ⚽ <strong>{name}</strong>{count > 1 && <span style={{ color: C.primary }}> ×{count}</span>}{assist && <span style={{ color: C.textLight }}> ← {assist}</span>}
-                    </div>
-                  ))}
+                  {matchEvents.length === 0
+                    ? <p style={{ fontFamily: "sans-serif", fontSize: 13, color: C.textLight, margin: 0 }}>Aucun but saisi</p>
+                    : Object.values(groupedEvents).map(({ name, count, assist }) => (
+                        <div key={name} style={{ fontFamily: "sans-serif", fontSize: 14, color: C.textMid, marginBottom: 4 }}>
+                          ⚽ <strong>{name}</strong>{count > 1 && <span style={{ color: C.primary }}> ×{count}</span>}{assist && <span style={{ color: C.textLight }}> ← {assist}</span>}
+                        </div>
+                      ))
+                  }
+                  {/* Aperçu Man of the Match */}
+                  {matchEvents.length > 0 && (() => {
+                    const motm = getManOfTheMatch({ events: matchEvents.map(e => ({ scorer: players.find(p => p.id === e.scorerId)?.name||"?" })) });
+                    return motm ? (
+                      <div style={{ marginTop: 12, padding: "8px 12px", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, fontFamily: "sans-serif", fontSize: 13, color: C.gold }}>
+                        ⭐ Man of the Match : <strong>{motm.name}</strong>
+                      </div>
+                    ) : null;
+                  })()}
                 </div>
-
                 <div style={{ display: "flex", gap: 8 }}>
                   <button onClick={() => setMatchStep("buts")} style={{ ...btnSec, flex: 1, padding: 12, fontSize: 15 }}>← Buts</button>
                   <button onClick={validateMatch} style={{ ...btnPri, flex: 2, padding: 14, fontSize: 18, letterSpacing: 2 }}>✅ Valider le match</button>
@@ -550,29 +591,46 @@ export default function FootballTracker() {
         {/* ════════ CLASSEMENT ════════ */}
         {page === "classement" && (
           <>
-            <div style={{ display: "flex", background: C.bgCard, borderRadius: 12, padding: 4, marginBottom: 20, border: `1px solid ${C.border}`, boxShadow: C.shadow }}>
-              {["buteurs","passeurs"].map(tab => (
-                <button key={tab} onClick={() => setActiveTab(tab)} style={badge(activeTab === tab)}>
-                  {tab === "buteurs" ? "⚽ Buteurs" : "🎯 Passeurs"}
+            {/* Sélecteur de vue */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 6, marginBottom: 20 }}>
+              {STAT_VIEWS.map(v => (
+                <button key={v.key} onClick={() => setStatView(v.key)} style={{ padding: "10px 4px", background: statView === v.key ? v.color : C.bgCard, border: `1px solid ${statView === v.key ? v.color : C.border}`, borderRadius: 10, color: statView === v.key ? "#fff" : C.textLight, fontFamily: "'Bebas Neue', Impact, sans-serif", fontSize: 13, letterSpacing: 1, cursor: "pointer", transition: "all 0.2s", display: "flex", flexDirection: "column", alignItems: "center", gap: 2, boxShadow: C.shadow }}>
+                  <span style={{ fontSize: 18 }}>{v.icon}</span>
+                  {v.label}
                 </button>
               ))}
             </div>
+
+            {/* Titre de la vue */}
+            <div style={{ fontFamily: "sans-serif", fontSize: 12, color: C.textXlight, letterSpacing: 2, textTransform: "uppercase", marginBottom: 12, textAlign: "center" }}>
+              {statView === "goals"   && "Classement par nombre de buts"}
+              {statView === "assists" && "Classement par passes décisives"}
+              {statView === "ratio"   && "Classement par efficacité (buts / match)"}
+              {statView === "streak"  && "Classement par série de matchs marqués consécutifs"}
+            </div>
+
             <div style={{ marginBottom: 28 }}>
               {loading ? (
                 <div style={{ textAlign: "center", padding: "40px 0", fontFamily: "sans-serif", color: C.textXlight }}>Chargement...</div>
-              ) : (activeTab === "buteurs" ? sorted("goals") : sorted("assists")).map((player, i) => {
-                const statKey   = activeTab === "buteurs" ? "goals" : "assists";
-                const statLabel = activeTab === "buteurs" ? "buts" : "passes";
-                const rank = i + 1; const isTop3 = rank <= 3 && player[statKey] > 0;
+              ) : sorted(statView).map((player, i) => {
+                const rank   = i + 1;
+                const isTop3 = rank <= 3 && (statView === "ratio" ? player.ratio > 0 : statView === "streak" ? player.streak > 0 : player[statView] > 0);
+                const val    = statView === "ratio" ? player.ratio.toFixed(2) : statView === "streak" ? player.streak : player[statView];
+                const color  = currentView.color;
                 return (
                   <div key={player.id} style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px 16px", marginBottom: 8, borderRadius: 14, background: flashId === player.id ? "#dbeafe" : isTop3 ? (rank===1?"#fffbeb":rank===2?"#f9fafb":"#fff7ed") : C.bgCard, border: `1px solid ${isTop3 ? (rank===1?"#fde68a":rank===2?"#e5e7eb":"#fed7aa") : C.border}`, boxShadow: C.shadow, transition: "all 0.3s" }}>
                     <div style={{ width: 32, textAlign: "center", fontSize: isTop3 ? 22 : 14, fontFamily: "sans-serif", color: positionColors[rank] || C.textXlight, fontWeight: "bold", flexShrink: 0 }}>{isTop3 ? trophyIcon(rank) : rank}</div>
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 20, letterSpacing: 2, color: C.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{player.name}</div>
-                      <div style={{ fontFamily: "sans-serif", fontSize: 11, color: C.textXlight, letterSpacing: 1, marginTop: 2 }}>{player.goals}G · {player.assists}A · {player.matches} matchs</div>
+                      <div style={{ fontSize: 20, letterSpacing: 2, color: C.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        {player.name}
+                        {player.streak > 0 && statView !== "streak" && <span style={{ fontFamily: "sans-serif", fontSize: 11, color: C.danger, marginLeft: 8 }}>🔥{player.streak}</span>}
+                      </div>
+                      <div style={{ fontFamily: "sans-serif", fontSize: 11, color: C.textXlight, letterSpacing: 1, marginTop: 2 }}>
+                        {player.goals}G · {player.assists}A · {player.matches} matchs · {player.ratio.toFixed(2)} b/m
+                      </div>
                     </div>
-                    <div style={{ fontSize: 34, color: player[statKey] > 0 ? (isTop3 ? positionColors[rank] : C.primary) : C.border, minWidth: 50, textAlign: "right", flexShrink: 0 }}>
-                      {player[statKey]}<span style={{ fontSize: 11, fontFamily: "sans-serif", display: "block", color: C.textXlight, letterSpacing: 1 }}>{statLabel}</span>
+                    <div style={{ fontSize: 32, color: val > 0 ? (isTop3 ? positionColors[rank] : color) : C.border, minWidth: 56, textAlign: "right", flexShrink: 0 }}>
+                      {val}<span style={{ fontSize: 11, fontFamily: "sans-serif", display: "block", color: C.textXlight, letterSpacing: 1 }}>{currentView.unit}</span>
                     </div>
                     {isAdmin && (
                       <div style={{ display: "flex", flexDirection: "column", gap: 4, flexShrink: 0 }}>
@@ -584,6 +642,7 @@ export default function FootballTracker() {
                 );
               })}
             </div>
+
             {isAdmin && (
               <div style={{ ...card, border: `1px dashed ${C.borderBlue}` }}>
                 <div style={{ ...secLabel, marginBottom: 10 }}>AJOUTER UN JOUEUR</div>
@@ -606,7 +665,7 @@ export default function FootballTracker() {
               <div style={{ fontSize: 34, color: "#fff", fontFamily: "'Bebas Neue', Impact, sans-serif" }}>{currentGroup?.amount.toLocaleString()} <span style={{ fontSize: 16, color: "rgba(255,255,255,0.6)" }}>FCFA</span></div>
             </div>
             <div style={{ ...secLabel, marginBottom: 10 }}>PROCHAINS GROUPES</div>
-            {[{ label: "Semaine prochaine", group: nextGroup }, { label: "Dans 2 semaines", group: nextNextGroup }].map(({ label, group }) => (
+            {[{ label: "Semaine prochaine", group: nextGroup },{ label: "Dans 2 semaines", group: nextNextGroup }].map(({ label, group }) => (
               <div key={label} style={{ ...card, display: "flex", alignItems: "center", gap: 14, marginBottom: 8 }}>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontFamily: "sans-serif", fontSize: 11, color: C.textXlight, letterSpacing: 1, marginBottom: 4, textTransform: "uppercase" }}>{label}</div>
@@ -645,9 +704,9 @@ export default function FootballTracker() {
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 20 }}>
               {[
                 { label: "MATCHS JOUÉS",    value: matchHistory.length, color: C.primary, icon: "📅" },
-                { label: "BUTS MARQUÉS",    value: totalGoals, color: C.accent, icon: "⚽" },
-                { label: "JOUEURS",         value: players.length, color: C.gold, icon: "👥" },
-                { label: "MOY. BUTS/MATCH", value: matchHistory.length > 0 ? (totalGoals/matchHistory.length).toFixed(1) : "0", color: "#7c3aed", icon: "📊" },
+                { label: "BUTS MARQUÉS",    value: totalGoals,          color: C.accent,  icon: "⚽" },
+                { label: "JOUEURS",         value: players.length,      color: C.gold,    icon: "👥" },
+                { label: "MOY. BUTS/MATCH", value: matchHistory.length > 0 ? (totalGoals/matchHistory.length).toFixed(1) : "0", color: C.purple, icon: "📊" },
               ].map(s => (
                 <div key={s.label} style={{ ...card, textAlign: "center" }}>
                   <div style={{ fontSize: 28, marginBottom: 4 }}>{s.icon}</div>
@@ -656,13 +715,18 @@ export default function FootballTracker() {
                 </div>
               ))}
             </div>
-            {topScorer?.goals > 0 && (
+
+            {/* Trophées */}
+            {(topScorer?.goals > 0 || topMotm || topStreak?.streak > 0) && (
               <div style={{ marginBottom: 20 }}>
-                <div style={secLabel}>🏆 MEILLEURS JOUEURS</div>
+                <div style={secLabel}>🏆 TROPHÉES</div>
                 {[
-                  { label: "Meilleur buteur",  player: topScorer, stat: topScorer.goals,  unit: "buts",  color: C.gold,    icon: "⚽", bg: "#fffbeb", bd: "#fde68a" },
-                  ...(topAssist?.assists > 0 ? [{ label: "Meilleur passeur", player: topAssist, stat: topAssist.assists, unit: "passes", color: "#7c3aed", icon: "🎯", bg: "#f5f3ff", bd: "#ddd6fe" }] : []),
-                ].map(item => (
+                  topScorer?.goals > 0    && { label: "Meilleur buteur",    player: topScorer,   stat: topScorer.goals,        unit: "buts",   color: C.gold,    icon: "⚽", bg: "#fffbeb", bd: "#fde68a" },
+                  topAssist?.assists > 0  && { label: "Meilleur passeur",   player: topAssist,   stat: topAssist.assists,      unit: "passes", color: C.purple,  icon: "🎯", bg: C.purpleBg, bd: C.purpleBorder },
+                  topRatio?.ratio > 0     && { label: "Meilleure efficacité",player: topRatio,    stat: topRatio.ratio.toFixed(2), unit: "b/m", color: C.orange,  icon: "📈", bg: C.orangeBg, bd: C.orangeBorder },
+                  topMotm                 && { label: "Roi du Man of Match", player: { name: topMotm[0] }, stat: topMotm[1], unit: "MOTM",  color: C.gold,    icon: "⭐", bg: "#fffbeb", bd: "#fde68a" },
+                  topStreak?.streak > 0   && { label: "Série en cours",     player: topStreak,   stat: topStreak.streak,       unit: "matchs 🔥", color: C.danger, icon: "🔥", bg: C.dangerBg, bd: "#fecaca" },
+                ].filter(Boolean).map(item => (
                   <div key={item.label} style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px 16px", marginBottom: 8, borderRadius: 14, background: item.bg, border: `1px solid ${item.bd}`, boxShadow: C.shadow }}>
                     <span style={{ fontSize: 28 }}>{item.icon}</span>
                     <div style={{ flex: 1 }}>
@@ -674,17 +738,19 @@ export default function FootballTracker() {
                 ))}
               </div>
             )}
+
             <div style={secLabel}>📋 TABLEAU COMPLET</div>
             <div style={{ background: C.bgCard, borderRadius: 14, overflow: "hidden", border: `1px solid ${C.border}`, boxShadow: C.shadow, marginTop: 10 }}>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 60px 60px 70px", padding: "10px 16px", borderBottom: `1px solid ${C.border}`, background: C.bgCard2 }}>
-                {["JOUEUR","⚽","🎯","MATCHS"].map(h => <div key={h} style={{ fontFamily: "sans-serif", fontSize: 11, color: C.textLight, letterSpacing: 2, textAlign: h==="JOUEUR"?"left":"center" }}>{h}</div>)}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 48px 48px 56px 56px", padding: "10px 12px", borderBottom: `1px solid ${C.border}`, background: C.bgCard2 }}>
+                {["JOUEUR","⚽","🎯","B/M","🔥"].map(h => <div key={h} style={{ fontFamily: "sans-serif", fontSize: 11, color: C.textLight, letterSpacing: 1, textAlign: h==="JOUEUR"?"left":"center" }}>{h}</div>)}
               </div>
               {sorted("goals").map((p, i) => (
-                <div key={p.id} style={{ display: "grid", gridTemplateColumns: "1fr 60px 60px 70px", padding: "12px 16px", borderBottom: `1px solid ${C.border}`, background: i%2===0?C.bgCard:C.bgCard2 }}>
-                  <div style={{ fontFamily: "sans-serif", fontSize: 14, color: C.text, display: "flex", alignItems: "center", gap: 6 }}>{i < 3 && p.goals > 0 && <span>{trophyIcon(i+1)}</span>}{p.name}</div>
-                  <div style={{ fontFamily: "sans-serif", fontSize: 16, color: C.primary, textAlign: "center", fontWeight: "bold" }}>{p.goals}</div>
-                  <div style={{ fontFamily: "sans-serif", fontSize: 16, color: "#7c3aed", textAlign: "center", fontWeight: "bold" }}>{p.assists}</div>
-                  <div style={{ fontFamily: "sans-serif", fontSize: 14, color: C.textLight, textAlign: "center" }}>{p.matches}</div>
+                <div key={p.id} style={{ display: "grid", gridTemplateColumns: "1fr 48px 48px 56px 56px", padding: "12px 12px", borderBottom: `1px solid ${C.border}`, background: i%2===0?C.bgCard:C.bgCard2 }}>
+                  <div style={{ fontFamily: "sans-serif", fontSize: 14, color: C.text, display: "flex", alignItems: "center", gap: 4 }}>{i < 3 && p.goals > 0 && <span>{trophyIcon(i+1)}</span>}{p.name}</div>
+                  <div style={{ fontFamily: "sans-serif", fontSize: 15, color: C.primary,  textAlign: "center", fontWeight: "bold" }}>{p.goals}</div>
+                  <div style={{ fontFamily: "sans-serif", fontSize: 15, color: C.purple,   textAlign: "center", fontWeight: "bold" }}>{p.assists}</div>
+                  <div style={{ fontFamily: "sans-serif", fontSize: 13, color: C.orange,   textAlign: "center", fontWeight: "bold" }}>{p.ratio.toFixed(2)}</div>
+                  <div style={{ fontFamily: "sans-serif", fontSize: 13, color: p.streak > 0 ? C.danger : C.textXlight, textAlign: "center", fontWeight: "bold" }}>{p.streak > 0 ? `🔥${p.streak}` : "-"}</div>
                 </div>
               ))}
             </div>
@@ -695,37 +761,36 @@ export default function FootballTracker() {
         {page === "matchs" && (
           <div>
             <div style={{ ...secLabel, marginBottom: 14 }}>{matchHistory.length} MATCH{matchHistory.length > 1 ? "S" : ""} ENREGISTRÉ{matchHistory.length > 1 ? "S" : ""}</div>
-            {matchHistory.length === 0 ? (
-              <div style={{ textAlign: "center", padding: "40px 0", fontFamily: "sans-serif", color: C.textXlight, fontSize: 14 }}>Aucun match enregistré</div>
-            ) : matchHistory.map((m, i) => {
-              const uniqueScorers = [...new Set(m.events?.map(e => e.scorer) || [])];
-              const topSM = Object.entries((m.events||[]).reduce((acc,e) => { acc[e.scorer]=(acc[e.scorer]||0)+1; return acc; }, {})).sort((a,b)=>b[1]-a[1])[0];
-              return (
-                <div key={m.id} onClick={() => setSelectedMatch(m)} style={{ ...card, display: "flex", alignItems: "center", gap: 14, marginBottom: 10, cursor: "pointer", transition: "box-shadow 0.2s" }}
-                  onMouseEnter={e => e.currentTarget.style.boxShadow = C.shadowMd}
-                  onMouseLeave={e => e.currentTarget.style.boxShadow = C.shadow}
-                >
-                  <div style={{ textAlign: "center", flexShrink: 0, minWidth: 40 }}>
-                    <div style={{ fontSize: 22, color: C.primary, fontFamily: "'Bebas Neue', Impact, sans-serif" }}>J{matchHistory.length - i}</div>
-                    <div style={{ fontFamily: "sans-serif", fontSize: 11, color: C.textXlight, whiteSpace: "nowrap" }}>{m.date}</div>
-                  </div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontFamily: "sans-serif", fontSize: 12, color: C.success, marginBottom: 2 }}>
-                      👥 {m.presentNames?.length || 0} présents
+            {matchHistory.length === 0
+              ? <div style={{ textAlign: "center", padding: "40px 0", fontFamily: "sans-serif", color: C.textXlight, fontSize: 14 }}>Aucun match enregistré</div>
+              : matchHistory.map((m, i) => {
+                  const motm = getManOfTheMatch(m);
+                  const uniqueScorers = [...new Set(m.events?.map(e => e.scorer)||[])];
+                  return (
+                    <div key={m.id} onClick={() => setSelectedMatch(m)} style={{ ...card, display: "flex", alignItems: "center", gap: 14, marginBottom: 10, cursor: "pointer", transition: "box-shadow 0.2s" }}
+                      onMouseEnter={e => e.currentTarget.style.boxShadow = C.shadowMd}
+                      onMouseLeave={e => e.currentTarget.style.boxShadow = C.shadow}
+                    >
+                      <div style={{ textAlign: "center", flexShrink: 0, minWidth: 40 }}>
+                        <div style={{ fontSize: 22, color: C.primary, fontFamily: "'Bebas Neue', Impact, sans-serif" }}>J{matchHistory.length - i}</div>
+                        <div style={{ fontFamily: "sans-serif", fontSize: 11, color: C.textXlight, whiteSpace: "nowrap" }}>{m.date}</div>
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontFamily: "sans-serif", fontSize: 12, color: C.success, marginBottom: 2 }}>👥 {m.presentNames?.length||0} présents</div>
+                        {motm && <div style={{ fontFamily: "sans-serif", fontSize: 11, color: C.gold, marginBottom: 2 }}>⭐ {motm.name} ({motm.goals} buts)</div>}
+                        <div style={{ fontFamily: "sans-serif", fontSize: 12, color: C.textMid, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                          {uniqueScorers.slice(0,3).join(", ")}{uniqueScorers.length > 3 ? ` +${uniqueScorers.length-3}` : ""}
+                        </div>
+                      </div>
+                      <div style={{ textAlign: "right", flexShrink: 0 }}>
+                        <div style={{ fontSize: 26, color: C.primary, fontFamily: "'Bebas Neue', Impact, sans-serif" }}>{m.events?.length}</div>
+                        <div style={{ fontFamily: "sans-serif", fontSize: 10, color: C.textXlight }}>BUTS</div>
+                      </div>
+                      <div style={{ color: C.textXlight, fontSize: 20, flexShrink: 0 }}>›</div>
                     </div>
-                    <div style={{ fontFamily: "sans-serif", fontSize: 13, color: C.textMid, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                      {uniqueScorers.slice(0,3).join(", ")}{uniqueScorers.length > 3 ? ` +${uniqueScorers.length-3}` : ""}
-                    </div>
-                    {topSM && topSM[1] > 1 && <div style={{ fontFamily: "sans-serif", fontSize: 11, color: C.gold }}>⭐ {topSM[0]} ({topSM[1]} buts)</div>}
-                  </div>
-                  <div style={{ textAlign: "right", flexShrink: 0 }}>
-                    <div style={{ fontSize: 26, color: C.primary, fontFamily: "'Bebas Neue', Impact, sans-serif" }}>{m.events?.length}</div>
-                    <div style={{ fontFamily: "sans-serif", fontSize: 10, color: C.textXlight }}>BUTS</div>
-                  </div>
-                  <div style={{ color: C.textXlight, fontSize: 20, flexShrink: 0 }}>›</div>
-                </div>
-              );
-            })}
+                  );
+                })
+            }
           </div>
         )}
       </div>
